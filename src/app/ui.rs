@@ -142,6 +142,23 @@ impl VideoTaggerApp {
                         ui.label(RichText::new("提示: Shift+Enter 临时覆盖一次").small().color(Color32::from_gray(130)));
                     });
 
+                    ui.add_space(10.0);
+                    panel_frame().show(ui, |ui| {
+                        ui.set_width(ui.available_width().max(1.0));
+                        ui.label(RichText::new("标签设置").strong().color(Color32::from_gray(220)));
+                        ui.add_space(6.0);
+                        if ui.checkbox(&mut self.config.tag_position_lock, "锁定标签位置").changed() {
+                            self.config.save();
+                        }
+                        ui.add_space(2.0);
+                        let hint = if self.config.tag_position_lock {
+                            "已锁定: 标签按创建顺序显示"
+                        } else {
+                            "未锁定: 标签按使用频率排序"
+                        };
+                        ui.label(RichText::new(hint).small().color(Color32::from_gray(130)));
+                    });
+
                     if let Some(ref prog) = self.folder_progress {
                         ui.add_space(10.0);
                         panel_frame().show(ui, |ui| {
@@ -469,8 +486,8 @@ impl VideoTaggerApp {
                     self.render_sorting_header(ui);
                     ui.add_space(8.0);
 
-                    let bottom_controls_h = 165.0;
-                    let screenshot_h = (ui.available_height() - bottom_controls_h).clamp(260.0, 640.0);
+                    let bottom_controls_h = 230.0;
+                    let screenshot_h = (ui.available_height() - bottom_controls_h).clamp(240.0, 640.0);
                     self.render_screenshot_area(ui, ctx, screenshot_h);
 
                     let spacer = (ui.available_height() - bottom_controls_h).max(0.0);
@@ -478,6 +495,7 @@ impl VideoTaggerApp {
                     self.render_label_preview_bar(ui);
                     ui.add_space(8.0);
                     self.render_tag_grid(ui);
+                    ui.add_space(16.0);
                 },
             );
             ui.separator();
@@ -653,7 +671,7 @@ impl VideoTaggerApp {
     }
 
     fn render_tag_grid(&mut self, ui: &mut egui::Ui) {
-        let tag_names = self.tag_library.sorted_names();
+        let tag_names = self.tag_library.names_for_display(self.config.tag_position_lock);
         let cols = 9;
         let rows = 3;
         panel_frame().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
@@ -661,7 +679,8 @@ impl VideoTaggerApp {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("快捷标签面板").strong().color(Color32::WHITE));
                     ui.add_space(4.0);
-                    ui.label(RichText::new("方向键移动焦点，数字键 1-9 快速添加；右键删除标签").small().color(Color32::from_gray(130)));
+                    let lock_hint = if self.config.tag_position_lock { "标签锁已开启，位置固定" } else { "未锁定，按频率排序" };
+                    ui.label(RichText::new(format!("{}；方向键移动焦点，数字键 1-9 快速添加；右键删除标签", lock_hint)).small().color(Color32::from_gray(130)));
                 });
                 ui.add_space(8.0);
                 let total_gap = 6.0 * (cols as f32 - 1.0);
@@ -885,7 +904,7 @@ impl VideoTaggerApp {
         if input.key_pressed(egui::Key::ArrowLeft) { self.tag_col = self.tag_col.saturating_sub(1); }
         if input.key_pressed(egui::Key::ArrowRight) { self.tag_col = (self.tag_col + 1).min(8); }
 
-        let tag_names = self.tag_library.sorted_names();
+        let tag_names = self.tag_library.names_for_display(self.config.tag_position_lock);
         let num_keys = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6, egui::Key::Num7, egui::Key::Num8, egui::Key::Num9];
         for (n, key) in num_keys.iter().enumerate() {
             if input.key_pressed(*key) {
