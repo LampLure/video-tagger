@@ -18,6 +18,7 @@ use crate::tags::{TagLibrary, MAX_TAG_CATEGORIES, MAX_TAGS_PER_CATEGORY, STAR_CA
 
 mod behavior;
 mod ai_behavior;
+mod ai_ui;
 mod ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +259,7 @@ impl eframe::App for VideoTaggerApp {
         self.poll_ai_events(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.render_top_bar(ui));
+        self.render_ai_mode_toolbar(ctx);
 
         egui::TopBottomPanel::top("ui_scale_bar").show(ctx, |ui| {
             egui::Frame::none()
@@ -342,6 +344,7 @@ impl eframe::App for VideoTaggerApp {
         self.render_completion_dialog(ctx);
         self.render_ai_notice(ctx);
         self.render_ai_cancel_dialog(ctx);
+        self.render_ai_control_window(ctx);
         self.process_thumbnail_queue(ctx);
 
         if self.app_mode == AppMode::Sorting {
