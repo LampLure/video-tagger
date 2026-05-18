@@ -117,7 +117,7 @@ impl VideoTaggerApp {
                             ui.label(RichText::new(&video.filename).small());
                             ui.separator();
                             ui.label(RichText::new("Q/E 翻页，WASD 选图，X 播放").small());
-                            ui.label(RichText::new("左右切标签，Space 选择，Delete 撤销").small());
+                            ui.label(RichText::new("上下切类别，左右切标签，Space 选择，Delete 撤销").small());
                         }
                     });
                 }
@@ -459,14 +459,12 @@ impl VideoTaggerApp {
                     let name = self.tag_library.categories()[i].name.clone();
                     let active = self.active_category_index == i;
                     if ui.add(egui::Button::new(RichText::new(name).color(if active { Color32::WHITE } else { Color32::from_gray(180) })).fill(if active { Color32::from_rgb(45, 95, 185) } else { Color32::from_gray(36) })).clicked() {
-                        self.active_category_index = i;
-                        self.selected_tag_index = 0;
+                        self.select_category(i);
                     }
                 }
                 let star_active = self.is_star_category();
                 if ui.add(egui::Button::new(STAR_CATEGORY_NAME).fill(if star_active { Color32::from_rgb(95, 70, 20) } else { Color32::from_gray(36) })).clicked() {
-                    self.active_category_index = self.tag_library.category_count();
-                    self.selected_tag_index = if self.is_starred { 1 } else { 0 };
+                    self.select_category(self.tag_library.category_count());
                 }
                 if self.tag_library.category_count() < MAX_TAG_CATEGORIES && !self.editing_new_category {
                     if ui.button("+ 添加标签类别").clicked() { self.editing_new_category = true; self.new_category_text.clear(); }
@@ -478,8 +476,7 @@ impl VideoTaggerApp {
                     if ui.button("删除当前类别").clicked() {
                         self.tag_library.remove_category(self.active_category_index);
                         self.tag_library.save();
-                        self.active_category_index = self.active_category_index.min(self.tag_library.category_count());
-                        self.selected_tag_index = 0;
+                        self.select_category(self.active_category_index.min(self.tag_library.category_count()));
                     }
                 }
             });
@@ -489,7 +486,7 @@ impl VideoTaggerApp {
                 for i in 0..tags.len() {
                     let tag = &tags[i];
                     let selected = self.selected_tag_index == i;
-                    let already = if self.is_star_category() { (i == 1 && self.is_starred) || (i == 0 && !self.is_starred) } else { self.current_labels.iter().any(|l| l == tag) };
+                    let already = if self.is_star_category() { (i == 1 && self.is_starred) || (i == 0 && !self.is_starred) } else { self.current_labels.get(self.active_category_index).map(|l| l == tag).unwrap_or(false) };
                     let fill = if selected { Color32::from_rgb(45, 95, 185) } else if already { Color32::from_rgb(30, 55, 35) } else { Color32::from_gray(36) };
                     let text = format!("{}: {}", i + 1, tag);
                     if ui.add(egui::Button::new(RichText::new(text).size(12.0)).fill(fill).min_size(Vec2::new(86.0, 28.0))).clicked() {
@@ -513,40 +510,45 @@ impl VideoTaggerApp {
                 }
             });
             ui.add_space(4.0);
-            ui.label(RichText::new("左右键切换，Space 选择并进入下一类别，1-9 直接选择，Delete 撤销最近选择。最后类别固定为星标。").small().color(Color32::from_gray(130)));
+            ui.label(RichText::new("上下键切换类别，左右键切换标签，Space 选择并进入下一类别，Delete 撤销最近选择。最后类别固定为星标。").small().color(Color32::from_gray(130)));
         });
     }
 
     fn render_video_list(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("视频队列").strong().size(15.0));
-        ui.label(RichText::new("点击可回看修改").small().color(Color32::from_gray(130)));
+        ui.label(RichText::new("队列会跟随当前视频；点击可回看修改").small().color(Color32::from_gray(130)));
         ui.separator();
         let mut clicked: Option<usize> = None;
         let row_h = 178.0;
         let rows = self.videos.len();
-        egui::ScrollArea::vertical().id_salt("video_list_scroll").auto_shrink([false, false]).show_rows(ui, row_h, rows, |ui, row_range| {
-            for i in row_range {
-                let is_current = i == self.current_video_index;
-                let processed = self.is_processed(i);
-                let name = self.videos[i].filename.clone();
-                let w = ui.available_width().max(1.0);
-                let fill = if is_current { Color32::from_rgb(38, 62, 105) } else if processed { Color32::from_rgb(24, 34, 24) } else { Color32::from_gray(26) };
-                let stroke = if is_current { Color32::from_rgb(70, 110, 180) } else if processed { Color32::from_rgb(35, 55, 35) } else { Color32::from_gray(35) };
-                let thumb_w = (w - 42.0).clamp(150.0, 240.0);
-                let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
-                let card_h = (thumb_h + 72.0).max(150.0);
-                let inner = card_frame(fill, stroke).show(ui, |ui| {
-                    ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
-                        self.paint_thumbnail(ui, rect, i, "...");
-                        ui.label(RichText::new(format!("{}第 {} 个", if is_current { "> " } else { "" }, i + 1)).small().strong());
-                        ui.add_sized([(w - 28.0).max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
+        let scroll_offset = self.current_video_index as f32 * row_h;
+        egui::ScrollArea::vertical()
+            .id_salt("video_list_scroll")
+            .vertical_scroll_offset(scroll_offset)
+            .auto_shrink([false, false])
+            .show_rows(ui, row_h, rows, |ui, row_range| {
+                for i in row_range {
+                    let is_current = i == self.current_video_index;
+                    let processed = self.is_processed(i);
+                    let name = self.videos[i].filename.clone();
+                    let w = ui.available_width().max(1.0);
+                    let fill = if is_current { Color32::from_rgb(38, 62, 105) } else if processed { Color32::from_rgb(24, 34, 24) } else { Color32::from_gray(26) };
+                    let stroke = if is_current { Color32::from_rgb(70, 110, 180) } else if processed { Color32::from_rgb(35, 55, 35) } else { Color32::from_gray(35) };
+                    let thumb_w = (w - 42.0).clamp(150.0, 240.0);
+                    let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
+                    let card_h = (thumb_h + 72.0).max(150.0);
+                    let inner = card_frame(fill, stroke).show(ui, |ui| {
+                        ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
+                            let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
+                            self.paint_thumbnail(ui, rect, i, "...");
+                            ui.label(RichText::new(format!("{}第 {} 个", if is_current { "> " } else { "" }, i + 1)).small().strong());
+                            ui.add_sized([(w - 28.0).max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
+                        });
                     });
-                });
-                if inner.response.interact(egui::Sense::click()).clicked() { clicked = Some(i); }
-                ui.add_space(8.0);
-            }
-        });
+                    if inner.response.interact(egui::Sense::click()).clicked() { clicked = Some(i); }
+                    ui.add_space(8.0);
+                }
+            });
         if let Some(i) = clicked { self.begin_edit_video(i, false); }
     }
 
