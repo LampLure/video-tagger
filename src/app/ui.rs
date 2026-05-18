@@ -28,19 +28,38 @@ fn status_badge(ui: &mut egui::Ui, text: &str, fill: Color32, color: Color32) {
 
 impl VideoTaggerApp {
     pub(super) fn render_top_bar(&mut self, ui: &mut egui::Ui) {
+        let top_fill = if self.ai_mode { Color32::from_rgb(16, 34, 58) } else { Color32::from_gray(20) };
+        let top_stroke = if self.ai_mode { Color32::from_rgb(45, 90, 140) } else { Color32::from_gray(30) };
         egui::Frame::none()
-            .fill(Color32::from_gray(20))
+            .fill(top_fill)
             .inner_margin(egui::Margin::symmetric(16, 10))
-            .stroke(egui::Stroke::new(1.0, Color32::from_gray(30)))
+            .stroke(egui::Stroke::new(1.0, top_stroke))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Video Tagger").strong().size(16.0).color(Color32::WHITE));
+                    let title = if self.ai_mode { "AI Video Tagger" } else { "Video Tagger" };
+                    let title_color = if self.ai_mode { Color32::from_rgb(205, 235, 255) } else { Color32::WHITE };
+                    let title_fill = if self.ai_mode { Color32::from_rgb(35, 95, 165) } else { Color32::from_gray(20) };
+                    let title_response = ui.add(
+                        egui::Button::new(RichText::new(title).strong().size(16.0).color(title_color))
+                            .fill(title_fill)
+                            .stroke(egui::Stroke::new(1.0, if self.ai_mode { Color32::from_rgb(80, 150, 220) } else { Color32::from_gray(35) }))
+                            .min_size(Vec2::new(124.0, 28.0)),
+                    );
+                    if title_response.clicked() {
+                        if self.ai_batch_state == AiBatchState::Running {
+                            self.ai_notice = Some("AI 正在分析中，请先取消或等待完成后再切换模式。".to_string());
+                        } else {
+                            self.ai_mode = !self.ai_mode;
+                            if self.ai_mode { self.refresh_ai_scripts(); }
+                        }
+                    }
+                    title_response.on_hover_text("点击切换普通模式 / AI 模式");
                     ui.separator();
                     ui.label(RichText::new(match self.app_mode {
                         AppMode::Fresh => "选择文件夹",
                         AppMode::Overview => "总览模式",
                         AppMode::Sorting => "分拣模式",
-                    }).color(Color32::from_gray(180)).size(14.0));
+                    }).color(if self.ai_mode { Color32::from_rgb(190, 220, 245) } else { Color32::from_gray(180) }).size(14.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("FFmpeg 设置").clicked() { self.ffmpeg_dialog_open = true; }
                         if let Some(ref path) = self.ffmpeg_path {
@@ -53,7 +72,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn render_sidebar(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none().fill(Color32::from_gray(24)).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+        egui::Frame::none().fill(if self.ai_mode { Color32::from_rgb(22, 32, 46) } else { Color32::from_gray(24) }).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.label(RichText::new("控制面板").strong().size(15.0).color(Color32::WHITE));
                 ui.separator();
@@ -343,9 +362,16 @@ impl VideoTaggerApp {
                 self.render_screenshot_area(ui, ctx, screenshot_h);
                 let spacer = (ui.available_height() - bottom_controls_h).max(0.0);
                 ui.add_space(spacer);
-                self.render_label_preview_bar(ui);
-                ui.add_space(8.0);
-                self.render_tag_grid(ui);
+                if self.ai_mode {
+                    ui.add_space(8.0);
+                    panel_frame().inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                        ui.label(RichText::new("AI 模式下，标签栏由右侧 AI 输出栏接管。" ).small().color(Color32::from_rgb(180, 215, 245)));
+                    });
+                } else {
+                    self.render_label_preview_bar(ui);
+                    ui.add_space(8.0);
+                    self.render_tag_grid(ui);
+                }
                 ui.add_space(16.0);
             });
             ui.separator();
@@ -361,7 +387,7 @@ impl VideoTaggerApp {
                     ui.label(RichText::new(&video.filename).strong().color(Color32::from_gray(220)));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("类别式打标：Space 选中并进入下一类，最后一类为星标").small().color(Color32::from_gray(140)));
+                    ui.label(RichText::new(if self.ai_mode { "AI 模式：右侧输出栏显示模型实时反馈；Space/Delete 仅用于 AI 确认" } else { "类别式打标：Space 选中并进入下一类，最后一类为星标" }).small().color(Color32::from_gray(140)));
                 });
             });
         });
