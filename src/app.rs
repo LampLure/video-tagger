@@ -162,6 +162,11 @@ impl Default for VideoTaggerApp {
 
 impl eframe::App for VideoTaggerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let scale = self.config.ui_scale.clamp(0.5, 3.0);
+        if (scale - ctx.pixels_per_point()).abs() > f32::EPSILON {
+            ctx.set_pixels_per_point(scale);
+        }
+
         self.audio_player.update();
         if self.playing_screenshot.is_some() && !self.audio_player.is_playing() {
             self.playing_screenshot = None;
@@ -179,6 +184,31 @@ impl eframe::App for VideoTaggerApp {
         self.poll_screenshot_results(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.render_top_bar(ui));
+
+        egui::TopBottomPanel::top("ui_scale_bar").show(ctx, |ui| {
+            egui::Frame::none()
+                .fill(Color32::from_gray(18))
+                .inner_margin(egui::Margin::symmetric(16, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("UI 缩放").small().color(Color32::from_gray(160)));
+                        let mut scale_percent = (self.config.ui_scale.clamp(0.5, 3.0) * 100.0).round();
+                        let changed = ui
+                            .add(
+                                egui::Slider::new(&mut scale_percent, 50.0..=300.0)
+                                    .suffix("%")
+                                    .show_value(true),
+                            )
+                            .changed();
+                        if changed {
+                            self.config.ui_scale = (scale_percent / 100.0).clamp(0.5, 3.0);
+                            self.config.save();
+                            ctx.set_pixels_per_point(self.config.ui_scale);
+                        }
+                        ui.label(RichText::new("空格 = Enter 确认/保存").small().color(Color32::from_gray(130)));
+                    });
+                });
+        });
 
         egui::SidePanel::left("sidebar")
             .resizable(false)
@@ -217,7 +247,17 @@ impl eframe::App for VideoTaggerApp {
         self.process_thumbnail_queue(ctx);
 
         if self.app_mode == AppMode::Sorting {
-            self.handle_keyboard_input(ctx);
+            let space_pressed = ctx.input(|i| i.key_pressed(egui::Key::Space));
+            if space_pressed && !self.editing_new_tag {
+                let shift = ctx.input(|i| i.modifiers.shift);
+                if self.is_star_phase {
+                    self.finalize_current_video();
+                } else {
+                    self.confirm_labels_and_enter_star(shift);
+                }
+            } else {
+                self.handle_keyboard_input(ctx);
+            }
         }
     }
 }
