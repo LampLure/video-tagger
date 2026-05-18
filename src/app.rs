@@ -104,7 +104,7 @@ impl Default for VideoTaggerApp {
         let (screenshot_tx, screenshot_rx) = mpsc::channel();
         Self {
             app_mode: AppMode::Fresh,
-            config: AppConfig::default(),
+            config: AppConfig::load(),
             tag_library: TagLibrary::load(),
             selected_folder: None,
             videos: Vec::new(),
