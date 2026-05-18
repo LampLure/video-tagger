@@ -1,9 +1,10 @@
 use super::*;
 
 impl VideoTaggerApp {
-    // Kept under the old name because app.rs already calls it after the top bar.
-    // It now renders AI controls as integrated side panels instead of a floating test window.
+    // Kept under the old name because app.rs calls it right after the normal top bar.
+    // This function draws an explicit clickable title overlay and, in AI mode, integrated AI side panels.
     pub(super) fn render_ai_mode_toolbar(&mut self, ctx: &egui::Context) {
+        self.render_ai_title_toggle_overlay(ctx);
         if !self.ai_mode {
             return;
         }
@@ -47,6 +48,37 @@ impl VideoTaggerApp {
                     self.render_ai_output_area(ui);
                 });
         }
+    }
+
+    fn render_ai_title_toggle_overlay(&mut self, ctx: &egui::Context) {
+        egui::Area::new("ai_title_toggle_overlay".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(8.0, 39.0))
+            .show(ctx, |ui| {
+                let title = if self.ai_mode { "AI Video Tagger" } else { "Video Tagger" };
+                let response = ui.add_sized(
+                    [150.0, 32.0],
+                    egui::Button::new(
+                        RichText::new(title)
+                            .strong()
+                            .size(16.0)
+                            .color(if self.ai_mode { Color32::from_rgb(210, 240, 255) } else { Color32::WHITE }),
+                    )
+                    .fill(if self.ai_mode { Color32::from_rgb(35, 95, 165) } else { Color32::from_rgb(24, 24, 24) })
+                    .stroke(egui::Stroke::new(1.0, if self.ai_mode { Color32::from_rgb(90, 170, 240) } else { Color32::from_rgb(70, 70, 70) })),
+                );
+                if response.clicked() {
+                    if self.ai_batch_state == AiBatchState::Running {
+                        self.ai_notice = Some("AI 正在分析中，请先取消或等待完成后再切换模式。".to_string());
+                    } else {
+                        self.ai_mode = !self.ai_mode;
+                        if self.ai_mode {
+                            self.refresh_ai_scripts();
+                        }
+                    }
+                }
+                response.on_hover_text("点击切换普通模式 / AI 模式");
+            });
     }
 
     // Disabled: the AI UI is integrated into the main layout now.
