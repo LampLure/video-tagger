@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 static FFMPEG_PATH: OnceLock<RwLock<PathBuf>> = OnceLock::new();
 
@@ -20,6 +21,25 @@ fn ffmpeg_command() -> Command {
         .map(|p| p.clone())
         .unwrap_or_else(|_| PathBuf::from("ffmpeg"));
     Command::new(path)
+}
+
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<bool, String> {
+    let mut child = cmd.spawn().map_err(|e| format!("启动 ffmpeg 失败: {}", e))?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status.success()),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("ffmpeg 超时 {} 秒", timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("等待 ffmpeg 失败: {}", e)),
+        }
+    }
 }
 
 fn is_executable_ffmpeg(path: &Path) -> bool {
@@ -110,28 +130,27 @@ pub fn extract_screenshots(
             continue;
         }
 
-        let status = ffmpeg_command()
-            .args([
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                &format!("{:.3}", time_sec),
-                "-i",
-                &video_path.to_string_lossy(),
-                "-vframes",
-                "1",
-                "-q:v",
-                "3",
-                "-vf",
-                "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
-                &output_path.to_string_lossy(),
-            ])
-            .status()
-            .map_err(|e| format!("ffmpeg error: {}", e))?;
+        let mut cmd = ffmpeg_command();
+        cmd.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            &format!("{:.3}", time_sec),
+            "-i",
+            &video_path.to_string_lossy(),
+            "-vframes",
+            "1",
+            "-q:v",
+            "3",
+            "-vf",
+            "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+            &output_path.to_string_lossy(),
+        ]);
 
-        if status.success() && usable_image_file(&output_path) {
+        let status = run_with_timeout(cmd, Duration::from_secs(8))?;
+        if status && usable_image_file(&output_path) {
             paths.push(output_path);
         }
     }
@@ -142,7 +161,7 @@ fn usable_image_file(path: &Path) -> bool {
     std::fs::metadata(path).map(|m| m.is_file() && m.len() > 1024).unwrap_or(false)
 }
 
-fn run_thumbnail_seek(video_path: &Path, seek_time: f64, output_path: &Path, accurate: bool) -> bool {
+fn run_thumbnail_seek(video_path: &Path, seek_time: f64, output_path: &Path, accurate: bool) -> Result<(), String> {
     let mut cmd = ffmpeg_command();
     cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-y");
     if !accurate {
@@ -159,11 +178,16 @@ fn run_thumbnail_seek(video_path: &Path, seek_time: f64, output_path: &Path, acc
         "-q:v",
         "3",
         "-vf",
-        "thumbnail=24,scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+        "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
     ]);
     cmd.arg(output_path);
 
-    cmd.status().map(|s| s.success()).unwrap_or(false) && usable_image_file(output_path)
+    let success = run_with_timeout(cmd, Duration::from_secs(6))?;
+    if success && usable_image_file(output_path) {
+        Ok(())
+    } else {
+        Err(format!("抽帧失败 seek={:.1}s", seek_time))
+    }
 }
 
 pub fn extract_thumbnail(video_path: &Path, output_path: &Path) -> Result<(), String> {
@@ -184,14 +208,25 @@ pub fn extract_thumbnail(video_path: &Path, output_path: &Path) -> Result<(), St
     }
     candidates.push(1.0_f64.min((duration - 0.1).max(0.1)));
 
+    let mut last_err = String::new();
     for seek in candidates {
-        if run_thumbnail_seek(video_path, seek, output_path, false) || run_thumbnail_seek(video_path, seek, output_path, true) {
-            return Ok(());
+        match run_thumbnail_seek(video_path, seek, output_path, false) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+        let _ = std::fs::remove_file(output_path);
+        match run_thumbnail_seek(video_path, seek, output_path, true) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
         }
         let _ = std::fs::remove_file(output_path);
     }
 
-    Err("ffmpeg thumbnail extraction failed".into())
+    Err(if last_err.is_empty() {
+        "ffmpeg thumbnail extraction failed".into()
+    } else {
+        last_err
+    })
 }
 
 pub fn extract_audio_clip(
@@ -204,30 +239,29 @@ pub fn extract_audio_clip(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let status = ffmpeg_command()
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-ss",
-            &format!("{:.3}", start_sec.max(0.0)),
-            "-i",
-            &video_path.to_string_lossy(),
-            "-t",
-            &format!("{:.3}", duration_secs),
-            "-ac",
-            "1",
-            "-ar",
-            "22050",
-            "-acodec",
-            "pcm_s16le",
-            &output_path.to_string_lossy(),
-        ])
-        .status()
-        .map_err(|e| format!("ffmpeg audio error: {}", e))?;
+    let mut cmd = ffmpeg_command();
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        &format!("{:.3}", start_sec.max(0.0)),
+        "-i",
+        &video_path.to_string_lossy(),
+        "-t",
+        &format!("{:.3}", duration_secs),
+        "-ac",
+        "1",
+        "-ar",
+        "22050",
+        "-acodec",
+        "pcm_s16le",
+        &output_path.to_string_lossy(),
+    ]);
 
-    if status.success() {
+    let status = run_with_timeout(cmd, Duration::from_secs(8))?;
+    if status {
         Ok(())
     } else {
         Err("ffmpeg audio extraction failed".into())
