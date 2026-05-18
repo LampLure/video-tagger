@@ -31,8 +31,13 @@ pub enum SortMode {
 }
 
 pub enum ThumbnailResult {
-    Loaded { index: usize, bytes: Vec<u8> },
+    Loaded { index: usize, size: [usize; 2], rgba: Vec<u8> },
     Failed { index: usize, reason: String },
+}
+
+pub enum ScreenshotResult {
+    Loaded { request_id: u64, paths: Vec<PathBuf> },
+    Failed { request_id: u64, reason: String },
 }
 
 pub struct VideoTaggerApp {
@@ -62,6 +67,10 @@ pub struct VideoTaggerApp {
     screenshot_paths: Vec<PathBuf>,
     screenshot_textures: HashMap<String, egui::TextureHandle>,
     screenshot_error: Option<String>,
+    screenshot_loading: bool,
+    screenshot_request_id: u64,
+    screenshot_rx: Option<mpsc::Receiver<ScreenshotResult>>,
+    screenshot_tx: mpsc::Sender<ScreenshotResult>,
 
     current_labels: Vec<String>,
     undone_labels: Vec<String>,
@@ -89,6 +98,7 @@ pub struct VideoTaggerApp {
 impl Default for VideoTaggerApp {
     fn default() -> Self {
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
+        let (screenshot_tx, screenshot_rx) = mpsc::channel();
         Self {
             app_mode: AppMode::Fresh,
             config: AppConfig::default(),
@@ -115,6 +125,10 @@ impl Default for VideoTaggerApp {
             screenshot_paths: Vec::new(),
             screenshot_textures: HashMap::new(),
             screenshot_error: None,
+            screenshot_loading: false,
+            screenshot_request_id: 0,
+            screenshot_rx: Some(screenshot_rx),
+            screenshot_tx,
 
             current_labels: Vec::new(),
             undone_labels: Vec::new(),
@@ -157,6 +171,7 @@ impl eframe::App for VideoTaggerApp {
         }
 
         self.poll_thumbnail_results(ctx);
+        self.poll_screenshot_results(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.render_top_bar(ui));
 
