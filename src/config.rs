@@ -138,16 +138,24 @@ pub fn parse_video_name(stem: &str) -> Option<ParsedVideoName> {
     }
     rest = rest.get(id_end + 1..)?;
 
-    if !rest.starts_with('[') {
-        return None;
+    let num_str;
+    if rest.starts_with('[') {
+        let num_end = rest.find(']')?;
+        num_str = rest.get(1..num_end)?.to_string();
+        rest = rest.get(num_end + 1..)?;
+    } else {
+        let digit_len = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digit_len == 0 {
+            return None;
+        }
+        num_str = rest.get(..digit_len)?.to_string();
+        rest = rest.get(digit_len..)?;
     }
-    let num_end = rest.find(']')?;
-    let num_str = rest.get(1..num_end)?;
+
     if num_str.is_empty() || !num_str.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let index = num_str.parse::<usize>().ok()?;
-    rest = rest.get(num_end + 1..)?;
 
     let mut starred = false;
     let mut labels = Vec::new();
