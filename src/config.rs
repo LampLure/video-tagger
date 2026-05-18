@@ -65,6 +65,30 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    pub fn load() -> Self {
+        let path = config_path();
+        if path.exists() {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    pub fn save(&self) {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
 pub fn sanitize_filename(s: &str) -> String {
     let invalid: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
     s.chars().filter(|c| !invalid.contains(c)).collect()
