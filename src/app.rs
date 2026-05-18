@@ -186,7 +186,13 @@ impl eframe::App for VideoTaggerApp {
             .max_width(220.0)
             .show(ctx, |ui| self.render_sidebar(ui));
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.app_mode {
+        let central_frame = if self.app_mode == AppMode::Sorting {
+            egui::Frame::none().fill(Color32::from_gray(24))
+        } else {
+            egui::Frame::central_panel(&ctx.style())
+        };
+
+        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.app_mode {
             AppMode::Fresh => self.render_welcome(ui),
             AppMode::Overview => self.render_overview(ui),
             AppMode::Sorting => self.render_sorting(ui, ctx),
