@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use eframe::egui;
 use egui::{Color32, RichText, StrokeKind, Vec2};
@@ -29,6 +30,11 @@ pub enum SortMode {
     Size,
 }
 
+pub enum ThumbnailResult {
+    Loaded { index: usize, bytes: Vec<u8> },
+    Failed { index: usize },
+}
+
 pub struct VideoTaggerApp {
     pub app_mode: AppMode,
     config: AppConfig,
@@ -46,6 +52,9 @@ pub struct VideoTaggerApp {
     thumbnail_queue: VecDeque<usize>,
     thumbnail_loaded: HashSet<usize>,
     thumbnail_errors: HashSet<usize>,
+    thumbnail_inflight: HashSet<usize>,
+    thumbnail_rx: Option<mpsc::Receiver<ThumbnailResult>>,
+    thumbnail_tx: mpsc::Sender<ThumbnailResult>,
 
     current_video_index: usize,
     screenshot_interval: f64,
@@ -79,6 +88,7 @@ pub struct VideoTaggerApp {
 
 impl Default for VideoTaggerApp {
     fn default() -> Self {
+        let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         Self {
             app_mode: AppMode::Fresh,
             config: AppConfig::default(),
@@ -95,6 +105,9 @@ impl Default for VideoTaggerApp {
             thumbnail_queue: VecDeque::new(),
             thumbnail_loaded: HashSet::new(),
             thumbnail_errors: HashSet::new(),
+            thumbnail_inflight: HashSet::new(),
+            thumbnail_rx: Some(thumbnail_rx),
+            thumbnail_tx,
 
             current_video_index: 0,
             screenshot_interval: 10.0,
@@ -142,6 +155,8 @@ impl eframe::App for VideoTaggerApp {
                 self.ffmpeg_dialog_open = true;
             }
         }
+
+        self.poll_thumbnail_results(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.render_top_bar(ui));
 
