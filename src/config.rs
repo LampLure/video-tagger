@@ -31,6 +31,8 @@ pub struct FolderProgress {
 pub struct AppConfig {
     pub screenshot_interval: f64,
     pub shift_lock: bool,
+    #[serde(default)]
+    pub tag_position_lock: bool,
     pub last_folder: Option<PathBuf>,
     pub tag_library: Vec<TagDef>,
 }
@@ -56,6 +58,7 @@ impl Default for AppConfig {
         Self {
             screenshot_interval: 10.0,
             shift_lock: false,
+            tag_position_lock: false,
             last_folder: None,
             tag_library: Vec::new(),
         }
