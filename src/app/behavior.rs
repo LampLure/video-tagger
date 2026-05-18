@@ -105,6 +105,10 @@ impl VideoTaggerApp {
         self.undone_labels.clear();
     }
 
+    pub(super) fn has_pending_annotation(&self) -> bool {
+        self.current_labels.iter().any(|label| !label.trim().is_empty()) || self.is_starred
+    }
+
     pub(super) fn reset_edit_state(&mut self) {
         self.current_labels.clear();
         self.undone_labels.clear();
@@ -148,6 +152,18 @@ impl VideoTaggerApp {
         self.app_mode = AppMode::Sorting;
     }
 
+    pub(super) fn switch_to_video(&mut self, index: usize, independent: bool) {
+        if index >= self.videos.len() { return; }
+        if index == self.current_video_index {
+            self.begin_edit_video(index, independent);
+            return;
+        }
+        if self.has_pending_annotation() {
+            self.apply_current_video_changes();
+        }
+        self.begin_edit_video(index, independent);
+    }
+
     pub(super) fn clear_thumbnail_state(&mut self) {
         self.overview_thumbnails.clear();
         self.thumbnail_queue.clear();
@@ -183,6 +199,9 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn exit_sorting(&mut self) {
+        if self.has_pending_annotation() {
+            self.apply_current_video_changes();
+        }
         self.reset_edit_state();
         self.independent_edit = None;
         self.app_mode = AppMode::Overview;
@@ -387,7 +406,7 @@ impl VideoTaggerApp {
         self.begin_edit_video(next_idx, false);
     }
 
-    pub(super) fn finalize_current_video(&mut self) {
+    fn apply_current_video_changes(&mut self) {
         if self.videos.is_empty() { return; }
         let video = self.videos[self.current_video_index].clone();
         let labels: Vec<String> = self.current_labels.iter().filter(|label| !label.trim().is_empty()).cloned().collect();
@@ -423,6 +442,11 @@ impl VideoTaggerApp {
             prog.last_processed = prog.last_processed.max(self.current_video_index + 1);
             if let Some(ref folder) = self.selected_folder { progress::save_progress(folder, prog); }
         }
+    }
+
+    pub(super) fn finalize_current_video(&mut self) {
+        if self.videos.is_empty() { return; }
+        self.apply_current_video_changes();
 
         let independent = self.independent_edit.is_some();
         let next_idx = self.current_video_index + 1;
