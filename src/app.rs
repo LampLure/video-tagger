@@ -69,6 +69,8 @@ pub struct VideoTaggerApp {
     screenshot_error: Option<String>,
     screenshot_loading: bool,
     screenshot_request_id: u64,
+    screenshot_cached_ranges: HashMap<String, Vec<PathBuf>>,
+    screenshot_prefetching: HashSet<String>,
     screenshot_rx: Option<mpsc::Receiver<ScreenshotResult>>,
     screenshot_tx: mpsc::Sender<ScreenshotResult>,
 
@@ -127,6 +129,8 @@ impl Default for VideoTaggerApp {
             screenshot_error: None,
             screenshot_loading: false,
             screenshot_request_id: 0,
+            screenshot_cached_ranges: HashMap::new(),
+            screenshot_prefetching: HashSet::new(),
             screenshot_rx: Some(screenshot_rx),
             screenshot_tx,
 
