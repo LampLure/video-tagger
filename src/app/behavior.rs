@@ -51,13 +51,38 @@ impl VideoTaggerApp {
         ffmpeg::extract_screenshots(&video_path, start_sec, effective_interval, count, &output_dir, &prefix)
     }
 
+    pub(super) fn category_count_with_star(&self) -> usize {
+        self.tag_library.category_count() + 1
+    }
+
+    pub(super) fn is_star_category(&self) -> bool {
+        self.active_category_index >= self.tag_library.category_count()
+    }
+
+    pub(super) fn current_category_tags(&self) -> Vec<String> {
+        if self.is_star_category() {
+            vec!["不打星".to_string(), "星标".to_string()]
+        } else {
+            self.tag_library.category_names_for_display(self.active_category_index, self.config.tag_position_lock)
+        }
+    }
+
+    fn clamp_category_cursor(&mut self) {
+        let max_category = self.category_count_with_star().saturating_sub(1);
+        self.active_category_index = self.active_category_index.min(max_category);
+        let tag_count = self.current_category_tags().len().max(1);
+        self.selected_tag_index = self.selected_tag_index.min(tag_count.saturating_sub(1));
+        self.selected_screenshot_index = self.selected_screenshot_index.min(9);
+    }
+
     pub(super) fn reset_edit_state(&mut self) {
         self.current_labels.clear();
         self.undone_labels.clear();
-        self.is_star_phase = false;
         self.is_starred = false;
         self.pending_overwrite_once = false;
-        self.show_star_hint = false;
+        self.active_category_index = 0;
+        self.selected_tag_index = 0;
+        self.selected_screenshot_index = 0;
         self.playing_screenshot = None;
         self.screenshot_error = None;
         self.screenshot_loading = false;
@@ -78,6 +103,9 @@ impl VideoTaggerApp {
                 self.is_starred = parsed.starred;
             }
         }
+        self.active_category_index = self.current_labels.len().min(self.tag_library.category_count());
+        self.selected_tag_index = 0;
+        self.clamp_category_cursor();
     }
 
     pub(super) fn begin_edit_video(&mut self, index: usize, independent: bool) {
@@ -255,7 +283,16 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn undo_label(&mut self) {
-        if let Some(label) = self.current_labels.pop() { self.undone_labels.push(label); }
+        if self.is_starred && self.is_star_category() {
+            self.is_starred = false;
+            self.selected_tag_index = 0;
+            return;
+        }
+        if let Some(label) = self.current_labels.pop() {
+            self.undone_labels.push(label);
+            self.active_category_index = self.current_labels.len().min(self.tag_library.category_count());
+            self.selected_tag_index = 0;
+        }
     }
 
     pub(super) fn redo_label(&mut self) {
@@ -265,18 +302,47 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn finish_new_tag(&mut self) {
-        if !self.new_tag_text.trim().is_empty() {
-            self.tag_library.add_tag(&self.new_tag_text);
+        if !self.new_tag_text.trim().is_empty() && !self.is_star_category() {
+            self.tag_library.add_tag_to_category(self.active_category_index, &self.new_tag_text);
             self.tag_library.save();
             self.new_tag_text.clear();
         }
         self.editing_new_tag = false;
     }
 
-    pub(super) fn confirm_labels_and_enter_star(&mut self, overwrite_once: bool) {
-        self.pending_overwrite_once = overwrite_once;
-        self.is_star_phase = true;
-        self.show_star_hint = true;
+    pub(super) fn finish_new_category(&mut self) {
+        if !self.new_category_text.trim().is_empty() {
+            if self.tag_library.add_category(&self.new_category_text) {
+                self.tag_library.save();
+            }
+            self.new_category_text.clear();
+        }
+        self.editing_new_category = false;
+    }
+
+    pub(super) fn select_current_tag_and_advance(&mut self) {
+        self.clamp_category_cursor();
+        if self.is_star_category() {
+            self.is_starred = self.selected_tag_index == 1;
+            self.finalize_current_video();
+            return;
+        }
+
+        let tags = self.current_category_tags();
+        if let Some(label) = tags.get(self.selected_tag_index).cloned() {
+            self.add_label(label);
+        }
+        self.active_category_index = (self.active_category_index + 1).min(self.tag_library.category_count());
+        self.selected_tag_index = 0;
+        self.clamp_category_cursor();
+    }
+
+    pub(super) fn play_selected_screenshot_audio(&mut self) {
+        if self.videos.is_empty() { return; }
+        let idx = self.selected_screenshot_index.min(self.screenshot_paths.len().saturating_sub(1));
+        let time_sec = self.screenshot_start_sec + idx as f64 * self.current_effective_interval();
+        self.audio_player.play_clip(&self.videos[self.current_video_index].path, time_sec);
+        self.playing_screenshot = Some(idx);
     }
 
     pub(super) fn finalize_current_video(&mut self) {
@@ -330,5 +396,45 @@ impl VideoTaggerApp {
             return;
         }
         self.begin_edit_video(next_idx, false);
+    }
+
+    pub(super) fn handle_keyboard_input(&mut self, ctx: &egui::Context) {
+        let input = ctx.input(|i| i.clone());
+        if self.editing_new_tag || self.editing_new_category {
+            if input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space) {
+                if self.editing_new_tag { self.finish_new_tag(); }
+                if self.editing_new_category { self.finish_new_category(); }
+            }
+            return;
+        }
+
+        if input.key_pressed(egui::Key::Q) { self.advance_screenshots(true); }
+        if input.key_pressed(egui::Key::E) { self.advance_screenshots(false); }
+        if input.key_pressed(egui::Key::A) { if self.selected_screenshot_index % 5 > 0 { self.selected_screenshot_index -= 1; } }
+        if input.key_pressed(egui::Key::D) { if self.selected_screenshot_index % 5 < 4 { self.selected_screenshot_index = (self.selected_screenshot_index + 1).min(9); } }
+        if input.key_pressed(egui::Key::W) { self.selected_screenshot_index = self.selected_screenshot_index.saturating_sub(5); }
+        if input.key_pressed(egui::Key::S) { self.selected_screenshot_index = (self.selected_screenshot_index + 5).min(9); }
+        if input.key_pressed(egui::Key::X) { self.play_selected_screenshot_audio(); }
+
+        if input.key_pressed(egui::Key::Delete) { self.undo_label(); }
+        if input.key_pressed(egui::Key::ArrowLeft) { self.selected_tag_index = self.selected_tag_index.saturating_sub(1); }
+        if input.key_pressed(egui::Key::ArrowRight) {
+            let max = self.current_category_tags().len().saturating_sub(1);
+            self.selected_tag_index = (self.selected_tag_index + 1).min(max);
+        }
+
+        let num_keys = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6, egui::Key::Num7, egui::Key::Num8, egui::Key::Num9];
+        for (n, key) in num_keys.iter().enumerate() {
+            if input.key_pressed(*key) {
+                if n < self.current_category_tags().len() {
+                    self.selected_tag_index = n;
+                    self.select_current_tag_and_advance();
+                    return;
+                }
+            }
+        }
+        if input.key_pressed(egui::Key::Space) || input.key_pressed(egui::Key::Enter) {
+            self.select_current_tag_and_advance();
+        }
     }
 }
