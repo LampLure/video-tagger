@@ -53,7 +53,7 @@ pub fn detect_progress_from_filenames(
     max_index.map(|idx| (idx, videos.len()))
 }
 
-pub fn init_progress(folder: &PathBuf, videos: &[VideoFile]) -> FolderProgress {
+pub fn init_progress_for_folder(folder: &PathBuf, videos: &[VideoFile]) -> FolderProgress {
     let digit_count = config::compute_digit_count(videos.len());
 
     if let Some(mut progress) = load_progress(folder) {
@@ -67,12 +67,17 @@ pub fn init_progress(folder: &PathBuf, videos: &[VideoFile]) -> FolderProgress {
 
     let identifier = detect_identifier_from_filenames(videos)
         .unwrap_or_else(|| config::generate_identifier_for_folder(folder));
-    let last_processed = detect_progress_from_filenames(videos, &identifier)
+    init_progress(videos, &identifier)
+}
+
+pub fn init_progress(videos: &[VideoFile], identifier: &str) -> FolderProgress {
+    let digit_count = config::compute_digit_count(videos.len());
+    let last_processed = detect_progress_from_filenames(videos, identifier)
         .map(|(idx, _)| idx)
         .unwrap_or(0);
 
     FolderProgress {
-        identifier,
+        identifier: identifier.into(),
         digit_count,
         last_processed,
         video_count: videos.len(),
