@@ -516,40 +516,42 @@ impl VideoTaggerApp {
 
     fn render_video_list(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("视频队列").strong().size(15.0));
-        ui.label(RichText::new("队列会跟随当前视频；点击可回看修改").small().color(Color32::from_gray(130)));
+        ui.label(RichText::new("自动进入下一视频时队列会跟随；手动滚动不会被锁定").small().color(Color32::from_gray(130)));
         ui.separator();
         let mut clicked: Option<usize> = None;
         let row_h = 178.0;
         let rows = self.videos.len();
-        let scroll_offset = self.current_video_index as f32 * row_h;
-        egui::ScrollArea::vertical()
+        let follow_index = self.video_list_follow_index.take();
+        let mut scroll_area = egui::ScrollArea::vertical()
             .id_salt("video_list_scroll")
-            .vertical_scroll_offset(scroll_offset)
-            .auto_shrink([false, false])
-            .show_rows(ui, row_h, rows, |ui, row_range| {
-                for i in row_range {
-                    let is_current = i == self.current_video_index;
-                    let processed = self.is_processed(i);
-                    let name = self.videos[i].filename.clone();
-                    let w = ui.available_width().max(1.0);
-                    let fill = if is_current { Color32::from_rgb(38, 62, 105) } else if processed { Color32::from_rgb(24, 34, 24) } else { Color32::from_gray(26) };
-                    let stroke = if is_current { Color32::from_rgb(70, 110, 180) } else if processed { Color32::from_rgb(35, 55, 35) } else { Color32::from_gray(35) };
-                    let thumb_w = (w - 42.0).clamp(150.0, 240.0);
-                    let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
-                    let card_h = (thumb_h + 72.0).max(150.0);
-                    let inner = card_frame(fill, stroke).show(ui, |ui| {
-                        ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
-                            let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
-                            self.paint_thumbnail(ui, rect, i, "...");
-                            ui.label(RichText::new(format!("{}第 {} 个", if is_current { "> " } else { "" }, i + 1)).small().strong());
-                            ui.add_sized([(w - 28.0).max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
-                        });
+            .auto_shrink([false, false]);
+        if let Some(index) = follow_index {
+            scroll_area = scroll_area.vertical_scroll_offset(index as f32 * row_h);
+        }
+        scroll_area.show_rows(ui, row_h, rows, |ui, row_range| {
+            for i in row_range {
+                let is_current = i == self.current_video_index;
+                let processed = self.is_processed(i);
+                let name = self.videos[i].filename.clone();
+                let w = ui.available_width().max(1.0);
+                let fill = if is_current { Color32::from_rgb(38, 62, 105) } else if processed { Color32::from_rgb(24, 34, 24) } else { Color32::from_gray(26) };
+                let stroke = if is_current { Color32::from_rgb(70, 110, 180) } else if processed { Color32::from_rgb(35, 55, 35) } else { Color32::from_gray(35) };
+                let thumb_w = (w - 42.0).clamp(150.0, 240.0);
+                let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
+                let card_h = (thumb_h + 72.0).max(150.0);
+                let inner = card_frame(fill, stroke).show(ui, |ui| {
+                    ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
+                        self.paint_thumbnail(ui, rect, i, "...");
+                        ui.label(RichText::new(format!("{}第 {} 个", if is_current { "> " } else { "" }, i + 1)).small().strong());
+                        ui.add_sized([(w - 28.0).max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
                     });
-                    if inner.response.interact(egui::Sense::click()).clicked() { clicked = Some(i); }
-                    ui.add_space(8.0);
-                }
-            });
-        if let Some(i) = clicked { self.begin_edit_video(i, false); }
+                });
+                if inner.response.interact(egui::Sense::click()).clicked() { clicked = Some(i); }
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(i) = clicked { self.switch_to_video(i, false); }
     }
 
     pub(super) fn render_ffmpeg_dialog(&mut self, ctx: &egui::Context) {
