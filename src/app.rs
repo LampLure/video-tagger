@@ -97,15 +97,18 @@ pub struct VideoTaggerApp {
 
     ffmpeg_custom_path: String,
     ffmpeg_dialog_open: bool,
+    ui_scale_percent_input: String,
 }
 
 impl Default for VideoTaggerApp {
     fn default() -> Self {
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         let (screenshot_tx, screenshot_rx) = mpsc::channel();
+        let config = AppConfig::load();
+        let ui_scale_percent_input = format!("{}", (config.ui_scale.clamp(0.5, 3.0) * 100.0).round() as i32);
         Self {
             app_mode: AppMode::Fresh,
-            config: AppConfig::load(),
+            config,
             tag_library: TagLibrary::load(),
             selected_folder: None,
             videos: Vec::new(),
@@ -158,6 +161,7 @@ impl Default for VideoTaggerApp {
 
             ffmpeg_custom_path: String::new(),
             ffmpeg_dialog_open: false,
+            ui_scale_percent_input,
         }
     }
 }
@@ -194,19 +198,32 @@ impl eframe::App for VideoTaggerApp {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("UI 缩放").small().color(Color32::from_gray(160)));
-                        let mut scale_percent = (self.config.ui_scale.clamp(0.5, 3.0) * 100.0).round();
-                        let changed = ui
-                            .add(
-                                egui::Slider::new(&mut scale_percent, 50.0..=300.0)
-                                    .suffix("%")
-                                    .show_value(true),
-                            )
-                            .changed();
-                        if changed {
-                            self.config.ui_scale = (scale_percent / 100.0).clamp(0.5, 3.0);
+                        let response = ui.add_sized(
+                            [56.0, 24.0],
+                            egui::TextEdit::singleline(&mut self.ui_scale_percent_input)
+                                .hint_text("100")
+                                .char_limit(3),
+                        );
+                        ui.label(RichText::new("%  范围 50-300，回车或点击应用生效").small().color(Color32::from_gray(130)));
+
+                        let apply_requested = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let apply_clicked = ui.button("应用").clicked();
+                        if apply_requested || apply_clicked {
+                            let parsed = self.ui_scale_percent_input.trim().parse::<f32>().unwrap_or(100.0);
+                            let percent = parsed.clamp(50.0, 300.0);
+                            self.ui_scale_percent_input = format!("{}", percent.round() as i32);
+                            self.config.ui_scale = percent / 100.0;
                             self.config.save();
                             ctx.set_pixels_per_point(self.config.ui_scale);
                         }
+
+                        if ui.button("重置100%").clicked() {
+                            self.config.ui_scale = 1.0;
+                            self.ui_scale_percent_input = "100".to_string();
+                            self.config.save();
+                            ctx.set_pixels_per_point(1.0);
+                        }
+                        ui.separator();
                         ui.label(RichText::new("Space 确认标签 / Q-E 翻页 / WASD 选图 / X 播放音频").small().color(Color32::from_gray(130)));
                     });
                 });
