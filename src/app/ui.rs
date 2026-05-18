@@ -457,17 +457,27 @@ impl VideoTaggerApp {
         let available = ui.available_size();
         let list_width = 240.0_f32.min((available.x * 0.20).max(200.0));
         let left_width = (available.x - list_width - 16.0).max(1.0);
+        let left_height = available.y.max(1.0);
+
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(left_width);
-                self.render_sorting_header(ui);
-                ui.add_space(8.0);
-                self.render_screenshot_area(ui, ctx);
-                ui.add_space(8.0);
-                self.render_label_preview_bar(ui);
-                ui.add_space(8.0);
-                self.render_tag_grid(ui);
-            });
+            ui.allocate_ui_with_layout(
+                Vec2::new(left_width, left_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    self.render_sorting_header(ui);
+                    ui.add_space(8.0);
+
+                    let bottom_controls_h = 165.0;
+                    let screenshot_h = (ui.available_height() - bottom_controls_h).clamp(260.0, 640.0);
+                    self.render_screenshot_area(ui, ctx, screenshot_h);
+
+                    let spacer = (ui.available_height() - bottom_controls_h).max(0.0);
+                    ui.add_space(spacer);
+                    self.render_label_preview_bar(ui);
+                    ui.add_space(8.0);
+                    self.render_tag_grid(ui);
+                },
+            );
             ui.separator();
             ui.vertical(|ui| {
                 ui.set_width(list_width);
@@ -495,10 +505,10 @@ impl VideoTaggerApp {
         });
     }
 
-    fn render_screenshot_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_screenshot_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, desired_height: f32) {
         if self.screenshot_loading && self.screenshot_paths.is_empty() {
             panel_frame().show(ui, |ui| {
-                ui.set_min_height(220.0);
+                ui.set_min_height(desired_height.max(220.0));
                 ui.centered_and_justified(|ui| ui.label(RichText::new("正在从视频抽帧中...").size(15.0).color(Color32::from_gray(140))));
             });
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -510,7 +520,7 @@ impl VideoTaggerApp {
                 .stroke(egui::Stroke::new(1.0, Color32::from_rgb(90, 40, 40)))
                 .corner_radius(egui::CornerRadius::same(4))
                 .show(ui, |ui| {
-                    ui.set_min_height(220.0);
+                    ui.set_min_height(desired_height.max(220.0));
                     ui.centered_and_justified(|ui| ui.label(RichText::new(err).color(Color32::from_rgb(240, 130, 130)).size(14.0)));
                 });
             return;
@@ -538,11 +548,14 @@ impl VideoTaggerApp {
 
         let cols = 5;
         let gap = 6.0;
-        let cell_w = ((ui.available_width() - gap * 4.0) / cols as f32).clamp(120.0, 340.0);
-        let cell_h = cell_w * 9.0 / 16.0;
+        let width_limited_cell_w = ((ui.available_width() - gap * 4.0) / cols as f32).max(120.0);
+        let grid_height = (desired_height - 36.0).max(180.0);
+        let cell_h = ((grid_height - gap) / 2.0).clamp(120.0, 300.0);
+        let cell_w = width_limited_cell_w.clamp(120.0, 380.0);
         let shown_interval = self.current_effective_interval();
 
         panel_frame().show(ui, |ui| {
+            ui.set_min_height(desired_height.max(cell_h * 2.0 + gap + 24.0));
             ui.vertical(|ui| {
                 for row in 0..2 {
                     ui.horizontal(|ui| {
@@ -639,9 +652,7 @@ impl VideoTaggerApp {
         let tag_names = self.tag_library.sorted_names();
         let cols = 9;
         let rows = 3;
-        let remaining_h = ui.available_height().max(160.0);
         panel_frame().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-            ui.set_min_height((remaining_h - 2.0).max(160.0));
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("快捷标签面板").strong().color(Color32::WHITE));
