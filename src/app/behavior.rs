@@ -28,6 +28,29 @@ impl VideoTaggerApp {
         }
     }
 
+    fn screenshot_range_key(&self, video_index: usize, start_sec: f64) -> String {
+        let path_key = self
+            .videos
+            .get(video_index)
+            .map(|v| ScreenshotCache::video_hash(&v.path))
+            .unwrap_or_else(|| "missing".to_string());
+        format!("{}:{}:{}", path_key, (start_sec * 10.0) as u64, (self.screenshot_interval * 1000.0) as u64)
+    }
+
+    fn extract_screenshot_range(video_path: PathBuf, duration: f64, start_sec: f64, interval: f64) -> Result<Vec<PathBuf>, String> {
+        let hash = ScreenshotCache::video_hash(&video_path);
+        let output_dir = config::cache_dir().join("screens").join(hash);
+        let count = 10usize;
+        let remaining = (duration - start_sec).max(0.0);
+        let effective_interval = if duration > 0.0 && (duration < interval * count as f64 || remaining < interval * count as f64) {
+            (remaining / count as f64).max(0.1)
+        } else {
+            interval.max(0.1)
+        };
+        let prefix = format!("r{}_i{}", (start_sec * 10.0) as u64, (effective_interval * 1000.0) as u64);
+        ffmpeg::extract_screenshots(&video_path, start_sec, effective_interval, count, &output_dir, &prefix)
+    }
+
     pub(super) fn reset_edit_state(&mut self) {
         self.current_labels.clear();
         self.undone_labels.clear();
@@ -90,9 +113,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn enter_overview(&mut self) {
-        let Some(folder) = self.selected_folder.clone() else {
-            return;
-        };
+        let Some(folder) = self.selected_folder.clone() else { return; };
         self.videos = scanner::scan_videos(&folder);
         self.clear_thumbnail_state();
         self.overview_search.clear();
@@ -104,9 +125,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn enter_sorting(&mut self) {
-        if self.videos.is_empty() {
-            return;
-        }
+        if self.videos.is_empty() { return; }
         let start_idx = self.folder_progress.as_ref().map(|p| p.last_processed).unwrap_or(0);
         self.begin_edit_video(start_idx.min(self.videos.len().saturating_sub(1)), false);
     }
@@ -142,18 +161,38 @@ impl VideoTaggerApp {
         filtered
     }
 
-    pub(super) fn load_current_screenshots(&mut self) {
-        if self.videos.is_empty() {
-            return;
+    pub(super) fn prioritize_overview_thumbnails(&mut self, indices: &[usize]) {
+        for &idx in indices.iter().rev() {
+            if self.overview_thumbnails.contains_key(&idx)
+                || self.thumbnail_loaded.contains(&idx)
+                || self.thumbnail_errors.contains_key(&idx)
+                || self.thumbnail_inflight.contains(&idx)
+            {
+                continue;
+            }
+            self.thumbnail_queue.retain(|queued| *queued != idx);
+            self.thumbnail_queue.push_front(idx);
         }
+    }
+
+    pub(super) fn load_current_screenshots(&mut self) {
+        if self.videos.is_empty() { return; }
         self.screenshot_start_sec = 0.0;
         self.request_current_screenshots();
     }
 
     pub(super) fn request_current_screenshots(&mut self) {
-        if self.videos.is_empty() {
+        if self.videos.is_empty() { return; }
+        let key = self.screenshot_range_key(self.current_video_index, self.screenshot_start_sec);
+        if let Some(paths) = self.screenshot_cached_ranges.get(&key).cloned() {
+            self.screenshot_loading = false;
+            self.screenshot_error = None;
+            self.screenshot_paths = paths;
+            self.screenshot_textures.clear();
+            self.prefetch_adjacent_screenshot_ranges();
             return;
         }
+
         let video_path = self.videos[self.current_video_index].path.clone();
         let duration = self.videos[self.current_video_index].ensure_duration();
         let start_sec = self.screenshot_start_sec;
@@ -162,22 +201,13 @@ impl VideoTaggerApp {
         self.screenshot_request_id = request_id;
         self.screenshot_loading = true;
         self.screenshot_error = None;
-        self.screenshot_paths.clear();
-        self.screenshot_textures.clear();
+        if self.screenshot_paths.is_empty() {
+            self.screenshot_textures.clear();
+        }
 
         let tx = self.screenshot_tx.clone();
         std::thread::spawn(move || {
-            let hash = ScreenshotCache::video_hash(&video_path);
-            let output_dir = config::cache_dir().join("screens").join(hash);
-            let count = 10usize;
-            let remaining = (duration - start_sec).max(0.0);
-            let effective_interval = if duration > 0.0 && (duration < interval * count as f64 || remaining < interval * count as f64) {
-                (remaining / count as f64).max(0.1)
-            } else {
-                interval.max(0.1)
-            };
-            let prefix = format!("r{}_i{}", (start_sec * 10.0) as u64, (effective_interval * 1000.0) as u64);
-            let result = ffmpeg::extract_screenshots(&video_path, start_sec, effective_interval, count, &output_dir, &prefix);
+            let result = Self::extract_screenshot_range(video_path, duration, start_sec, interval);
             let _ = match result {
                 Ok(paths) if !paths.is_empty() => tx.send(ScreenshotResult::Loaded { request_id, paths }),
                 Ok(_) => tx.send(ScreenshotResult::Failed { request_id, reason: "ffmpeg 截图为空".to_string() }),
@@ -186,10 +216,33 @@ impl VideoTaggerApp {
         });
     }
 
-    pub(super) fn advance_screenshots(&mut self, backward: bool) {
-        if self.videos.is_empty() {
-            return;
+    pub(super) fn prefetch_adjacent_screenshot_ranges(&mut self) {
+        if self.videos.is_empty() { return; }
+        let duration = self.videos[self.current_video_index].duration_secs.unwrap_or(0.0);
+        let step = self.screenshot_interval * 10.0;
+        let max_start = if duration <= step { 0.0 } else { ((duration - 0.001) / step).floor() * step };
+        let candidates = [self.screenshot_start_sec + step, self.screenshot_start_sec + step * 2.0, self.screenshot_start_sec - step];
+        for start in candidates {
+            if start < 0.0 || start > max_start { continue; }
+            let key = self.screenshot_range_key(self.current_video_index, start);
+            if self.screenshot_cached_ranges.contains_key(&key) || self.screenshot_prefetching.contains(&key) { continue; }
+            self.screenshot_prefetching.insert(key.clone());
+            let video_path = self.videos[self.current_video_index].path.clone();
+            let interval = self.screenshot_interval;
+            let tx = self.screenshot_tx.clone();
+            std::thread::spawn(move || {
+                let result = Self::extract_screenshot_range(video_path, duration, start, interval);
+                if let Ok(paths) = result {
+                    if !paths.is_empty() {
+                        let _ = tx.send(ScreenshotResult::Loaded { request_id: 0, paths });
+                    }
+                }
+            });
         }
+    }
+
+    pub(super) fn advance_screenshots(&mut self, backward: bool) {
+        if self.videos.is_empty() { return; }
         let duration = self.videos[self.current_video_index].ensure_duration();
         let step = self.screenshot_interval * 10.0;
         if backward {
@@ -202,24 +255,18 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn add_label(&mut self, label: String) {
-        if self.current_labels.iter().any(|existing| existing == &label) {
-            return;
-        }
+        if self.current_labels.iter().any(|existing| existing == &label) { return; }
         self.current_labels.push(label);
         self.undone_labels.clear();
     }
 
     pub(super) fn undo_label(&mut self) {
-        if let Some(label) = self.current_labels.pop() {
-            self.undone_labels.push(label);
-        }
+        if let Some(label) = self.current_labels.pop() { self.undone_labels.push(label); }
     }
 
     pub(super) fn redo_label(&mut self) {
         if let Some(label) = self.undone_labels.pop() {
-            if !self.current_labels.iter().any(|existing| existing == &label) {
-                self.current_labels.push(label);
-            }
+            if !self.current_labels.iter().any(|existing| existing == &label) { self.current_labels.push(label); }
         }
     }
 
@@ -239,9 +286,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn finalize_current_video(&mut self) {
-        if self.videos.is_empty() {
-            return;
-        }
+        if self.videos.is_empty() { return; }
         let video = self.videos[self.current_video_index].clone();
         let should_rename = !self.current_labels.is_empty() || self.is_starred;
 
@@ -273,9 +318,7 @@ impl VideoTaggerApp {
 
         if let Some(ref mut prog) = self.folder_progress {
             prog.last_processed = prog.last_processed.max(self.current_video_index + 1);
-            if let Some(ref folder) = self.selected_folder {
-                progress::save_progress(folder, prog);
-            }
+            if let Some(ref folder) = self.selected_folder { progress::save_progress(folder, prog); }
         }
 
         let independent = self.independent_edit.is_some();
