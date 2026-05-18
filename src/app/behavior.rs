@@ -81,9 +81,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn begin_edit_video(&mut self, index: usize, independent: bool) {
-        if index >= self.videos.len() {
-            return;
-        }
+        if index >= self.videos.len() { return; }
         self.current_video_index = index;
         self.screenshot_interval = self.config.screenshot_interval;
         self.screenshot_textures.clear();
@@ -118,9 +116,7 @@ impl VideoTaggerApp {
         self.clear_thumbnail_state();
         self.overview_search.clear();
         self.folder_progress = Some(progress::init_progress_for_folder(&folder, &self.videos));
-        if let Some(ref prog) = self.folder_progress {
-            progress::save_progress(&folder, prog);
-        }
+        if let Some(ref prog) = self.folder_progress { progress::save_progress(&folder, prog); }
         self.app_mode = AppMode::Overview;
     }
 
@@ -167,9 +163,7 @@ impl VideoTaggerApp {
                 || self.thumbnail_loaded.contains(&idx)
                 || self.thumbnail_errors.contains_key(&idx)
                 || self.thumbnail_inflight.contains(&idx)
-            {
-                continue;
-            }
+            { continue; }
             self.thumbnail_queue.retain(|queued| *queued != idx);
             self.thumbnail_queue.push_front(idx);
         }
@@ -201,15 +195,14 @@ impl VideoTaggerApp {
         self.screenshot_request_id = request_id;
         self.screenshot_loading = true;
         self.screenshot_error = None;
-        if self.screenshot_paths.is_empty() {
-            self.screenshot_textures.clear();
-        }
+        if self.screenshot_paths.is_empty() { self.screenshot_textures.clear(); }
 
         let tx = self.screenshot_tx.clone();
+        let key_for_thread = key.clone();
         std::thread::spawn(move || {
             let result = Self::extract_screenshot_range(video_path, duration, start_sec, interval);
             let _ = match result {
-                Ok(paths) if !paths.is_empty() => tx.send(ScreenshotResult::Loaded { request_id, paths }),
+                Ok(paths) if !paths.is_empty() => tx.send(ScreenshotResult::Loaded { request_id, key: key_for_thread, paths }),
                 Ok(_) => tx.send(ScreenshotResult::Failed { request_id, reason: "ffmpeg 截图为空".to_string() }),
                 Err(reason) => tx.send(ScreenshotResult::Failed { request_id, reason }),
             };
@@ -230,11 +223,12 @@ impl VideoTaggerApp {
             let video_path = self.videos[self.current_video_index].path.clone();
             let interval = self.screenshot_interval;
             let tx = self.screenshot_tx.clone();
+            let key_for_thread = key.clone();
             std::thread::spawn(move || {
                 let result = Self::extract_screenshot_range(video_path, duration, start, interval);
                 if let Ok(paths) = result {
                     if !paths.is_empty() {
-                        let _ = tx.send(ScreenshotResult::Loaded { request_id: 0, paths });
+                        let _ = tx.send(ScreenshotResult::Prefetched { key: key_for_thread, paths });
                     }
                 }
             });
