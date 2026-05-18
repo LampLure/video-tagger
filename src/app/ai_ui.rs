@@ -1,53 +1,10 @@
 use super::*;
 
 impl VideoTaggerApp {
-    // Kept under the old name because app.rs calls it right after the normal top bar.
-    // This function draws an explicit clickable title overlay and, in AI mode, integrated AI side panels.
+    // App.rs calls this after the normal top bar. Keep it lightweight:
+    // it only draws the title toggle overlay. AI settings/output are integrated into the normal layout.
     pub(super) fn render_ai_mode_toolbar(&mut self, ctx: &egui::Context) {
         self.render_ai_title_toggle_overlay(ctx);
-        if !self.ai_mode {
-            return;
-        }
-
-        egui::SidePanel::left("ai_integrated_sidebar")
-            .resizable(true)
-            .min_width(300.0)
-            .default_width(360.0)
-            .max_width(460.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(Color32::from_rgb(18, 30, 46))
-                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(38, 72, 110)))
-                    .inner_margin(egui::Margin::same(10)),
-            )
-            .show(ctx, |ui| {
-                ui.label(RichText::new("AI 设置").strong().size(15.0).color(Color32::from_rgb(190, 225, 255)));
-                ui.separator();
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    self.render_ai_service_controls(ui);
-                    ui.separator();
-                    self.render_ai_runtime_settings(ui);
-                    ui.separator();
-                    self.render_ai_text_settings(ui);
-                });
-            });
-
-        if self.app_mode == AppMode::Sorting {
-            egui::SidePanel::right("ai_output_sidebar")
-                .resizable(true)
-                .min_width(340.0)
-                .default_width(420.0)
-                .max_width(620.0)
-                .frame(
-                    egui::Frame::none()
-                        .fill(Color32::from_rgb(16, 25, 38))
-                        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(45, 85, 130)))
-                        .inner_margin(egui::Margin::same(10)),
-                )
-                .show(ctx, |ui| {
-                    self.render_ai_output_area(ui);
-                });
-        }
     }
 
     fn render_ai_title_toggle_overlay(&mut self, ctx: &egui::Context) {
@@ -72,16 +29,32 @@ impl VideoTaggerApp {
                         self.ai_notice = Some("AI 正在分析中，请先取消或等待完成后再切换模式。".to_string());
                     } else {
                         self.ai_mode = !self.ai_mode;
-                        if self.ai_mode {
-                            self.refresh_ai_scripts();
-                        }
+                        if self.ai_mode { self.refresh_ai_scripts(); }
                     }
                 }
                 response.on_hover_text("点击切换普通模式 / AI 模式");
             });
     }
 
-    // Disabled: the AI UI is integrated into the main layout now.
+    pub(super) fn render_ai_sidebar_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        egui::Frame::none()
+            .fill(Color32::from_rgb(18, 30, 46))
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(38, 72, 110)))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(RichText::new("AI 设置").strong().size(15.0).color(Color32::from_rgb(190, 225, 255)));
+                ui.separator();
+                self.render_ai_service_controls(ui);
+                ui.separator();
+                self.render_ai_runtime_settings(ui);
+                ui.separator();
+                self.render_ai_text_settings(ui);
+            });
+    }
+
+    // Disabled: no floating AI window.
     pub(super) fn render_ai_control_window(&mut self, _ctx: &egui::Context) {}
 
     fn render_ai_service_controls(&mut self, ui: &mut egui::Ui) {
@@ -150,7 +123,7 @@ impl VideoTaggerApp {
 
     fn render_ai_text_settings(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new("AI 文本设置 JSON")
-            .default_open(true)
+            .default_open(false)
             .show(ui, |ui| {
                 ui.label(RichText::new("限制 AI 能使用的标签和评分规则。" ).small().color(Color32::from_gray(170)));
                 if ui.add_sized([ui.available_width(), 260.0], egui::TextEdit::multiline(&mut self.config.ai_text_settings).font(egui::TextStyle::Monospace)).changed() {
@@ -172,41 +145,46 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn render_ai_output_area(&mut self, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("AI 输出").strong().size(15.0).color(Color32::from_rgb(200, 230, 255)));
+        egui::Frame::none()
+            .fill(Color32::from_rgb(16, 25, 38))
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(45, 85, 130)))
+            .corner_radius(egui::CornerRadius::same(4))
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("AI 输出").strong().size(15.0).color(Color32::from_rgb(200, 230, 255)));
+                    ui.separator();
+                    let status = match self.ai_batch_state {
+                        AiBatchState::Idle => "等待启动",
+                        AiBatchState::Running => "正在分析",
+                        AiBatchState::AwaitingConfirmation => "等待确认：Space 接受 / Delete 重生",
+                    };
+                    ui.label(RichText::new(status).small().color(Color32::from_gray(170)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.ai_batch_state == AiBatchState::Running || self.ai_batch_state == AiBatchState::AwaitingConfirmation {
+                            if ui.button("取消 AI 分析").clicked() { self.request_cancel_ai(); }
+                        } else if ui.add_enabled(self.app_mode == AppMode::Sorting, egui::Button::new("启动 AI 分析")).clicked() {
+                            self.start_ai_batch();
+                        }
+                    });
+                });
                 ui.separator();
-                let status = match self.ai_batch_state {
-                    AiBatchState::Idle => "等待启动",
-                    AiBatchState::Running => "正在分析",
-                    AiBatchState::AwaitingConfirmation => "等待确认：Space 接受 / Delete 重生",
-                };
-                ui.label(RichText::new(status).small().color(Color32::from_gray(170)));
-            });
-            ui.horizontal(|ui| {
-                if self.ai_batch_state == AiBatchState::Running || self.ai_batch_state == AiBatchState::AwaitingConfirmation {
-                    if ui.button("取消 AI 分析").clicked() { self.request_cancel_ai(); }
-                } else if ui.add_enabled(self.app_mode == AppMode::Sorting, egui::Button::new("启动 AI 分析")).clicked() {
-                    self.start_ai_batch();
+                if let Some(result) = &self.ai_pending_result {
+                    ui.label(RichText::new(format!("候选标签：{}", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") })).color(Color32::from_rgb(190, 230, 190)));
+                    ui.label(RichText::new(format!("候选评分：{}", result.score)).color(Color32::from_rgb(190, 230, 190)));
+                    ui.label(RichText::new("Space 接受，Delete 重新生成。" ).small().color(Color32::YELLOW));
+                    ui.separator();
                 }
-            });
-            ui.separator();
-            if let Some(result) = &self.ai_pending_result {
-                ui.label(RichText::new(format!("候选标签：{}", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") })).color(Color32::from_rgb(190, 230, 190)));
-                ui.label(RichText::new(format!("候选评分：{}", result.score)).color(Color32::from_rgb(190, 230, 190)));
-                ui.label(RichText::new("Space 接受，Delete 重新生成。" ).small().color(Color32::YELLOW));
-                ui.separator();
-            }
-            egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                if self.ai_log.is_empty() {
-                    ui.label(RichText::new("AI 实时分析日志会显示在这里。" ).color(Color32::from_gray(140)));
-                } else {
-                    for line in &self.ai_log {
-                        ui.label(RichText::new(line).color(Color32::from_gray(225)));
+                egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).auto_shrink([false, false]).show(ui, |ui| {
+                    if self.ai_log.is_empty() {
+                        ui.label(RichText::new("AI 实时分析日志会显示在这里。" ).color(Color32::from_gray(140)));
+                    } else {
+                        for line in &self.ai_log {
+                            ui.label(RichText::new(line).color(Color32::from_gray(225)));
+                        }
                     }
-                }
+                });
             });
-        });
     }
 
     pub(super) fn render_ai_notice(&mut self, ctx: &egui::Context) {
