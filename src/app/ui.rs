@@ -143,6 +143,13 @@ impl VideoTaggerApp {
             .id_salt("overview_scroll")
             .auto_shrink([false, false])
             .show_rows(ui, row_h, rows, |ui, row_range| {
+                let mut visible_indices = Vec::new();
+                for row in row_range.clone() {
+                    let start = row * cols;
+                    let end = (start + cols).min(filtered.len());
+                    visible_indices.extend_from_slice(&filtered[start..end]);
+                }
+                self.prioritize_overview_thumbnails(&visible_indices);
                 for row in row_range {
                     let start = row * cols;
                     let end = (start + cols).min(filtered.len());
@@ -240,11 +247,18 @@ impl VideoTaggerApp {
         if let Some(rx) = self.screenshot_rx.take() {
             loop {
                 match rx.try_recv() {
-                    Ok(ScreenshotResult::Loaded { request_id, paths }) if request_id == self.screenshot_request_id => {
+                    Ok(ScreenshotResult::Loaded { request_id, key, paths }) if request_id == self.screenshot_request_id => {
+                        self.screenshot_cached_ranges.insert(key, paths.clone());
                         self.screenshot_loading = false;
                         self.screenshot_error = None;
                         self.screenshot_paths = paths;
                         self.screenshot_textures.clear();
+                        self.prefetch_adjacent_screenshot_ranges();
+                        changed = true;
+                    }
+                    Ok(ScreenshotResult::Prefetched { key, paths }) => {
+                        self.screenshot_prefetching.remove(&key);
+                        self.screenshot_cached_ranges.insert(key, paths);
                         changed = true;
                     }
                     Ok(ScreenshotResult::Failed { request_id, reason }) if request_id == self.screenshot_request_id => {
@@ -340,7 +354,7 @@ impl VideoTaggerApp {
     }
 
     fn render_screenshot_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if self.screenshot_loading {
+        if self.screenshot_loading && self.screenshot_paths.is_empty() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_min_height(220.0);
                 ui.centered_and_justified(|ui| ui.label(RichText::new("截图加载中...").size(20.0).color(Color32::from_gray(160))));
@@ -401,6 +415,9 @@ impl VideoTaggerApp {
                     }
                 });
                 ui.add_space(gap);
+            }
+            if self.screenshot_loading {
+                ui.label(RichText::new("正在预载下一组截图...").small().color(Color32::from_gray(150)));
             }
         });
     }
