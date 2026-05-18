@@ -1,29 +1,56 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{OnceLock, RwLock};
+
+static FFMPEG_PATH: OnceLock<RwLock<PathBuf>> = OnceLock::new();
+
+fn ffmpeg_lock() -> &'static RwLock<PathBuf> {
+    FFMPEG_PATH.get_or_init(|| RwLock::new(PathBuf::from("ffmpeg")))
+}
+
+pub fn set_ffmpeg_path(path: PathBuf) {
+    if let Ok(mut current) = ffmpeg_lock().write() {
+        *current = path;
+    }
+}
+
+fn ffmpeg_command() -> Command {
+    let path = ffmpeg_lock()
+        .read()
+        .map(|p| p.clone())
+        .unwrap_or_else(|_| PathBuf::from("ffmpeg"));
+    Command::new(path)
+}
+
+fn is_executable_ffmpeg(path: &Path) -> bool {
+    Command::new(path)
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
 pub fn find_ffmpeg() -> Option<PathBuf> {
-    // Check common locations
-    let common_paths = [
-        "ffmpeg.exe",
-        "ffmpeg",
-        r"C:\ffmpeg\bin\ffmpeg.exe",
-        r"C:\ffmpeg\ffmpeg.exe",
+    let mut candidates = vec![
+        PathBuf::from("ffmpeg"),
+        PathBuf::from("ffmpeg.exe"),
+        PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        PathBuf::from(r"C:\ffmpeg\ffmpeg.exe"),
+        PathBuf::from("/usr/bin/ffmpeg"),
+        PathBuf::from("/usr/local/bin/ffmpeg"),
+        PathBuf::from("/opt/homebrew/bin/ffmpeg"),
     ];
 
-    for p in &common_paths {
-        if Path::new(p).exists() {
-            return Some(PathBuf::from(p));
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            candidates.push(dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }));
         }
     }
 
-    // Check PATH
-    if let Ok(output) = Command::new("where").arg("ffmpeg").output() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(line) = stdout.lines().next() {
-            let path = PathBuf::from(line.trim());
-            if path.exists() {
-                return Some(path);
-            }
+    for p in candidates {
+        if is_executable_ffmpeg(&p) {
+            set_ffmpeg_path(p.clone());
+            return Some(p);
         }
     }
 
@@ -31,7 +58,7 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
 }
 
 pub fn get_video_duration(path: &Path) -> Option<f64> {
-    let output = Command::new("ffmpeg")
+    let output = ffmpeg_command()
         .args(["-i", &path.to_string_lossy()])
         .output()
         .ok()?;
@@ -39,7 +66,6 @@ pub fn get_video_duration(path: &Path) -> Option<f64> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in stderr.lines() {
         if line.contains("Duration:") {
-            // Duration: 00:01:30.50
             let parts: Vec<&str> = line.split_whitespace().collect();
             if let Some(pos) = parts.iter().position(|&p| p == "Duration:") {
                 if let Some(time_str) = parts.get(pos + 1) {
@@ -53,7 +79,6 @@ pub fn get_video_duration(path: &Path) -> Option<f64> {
 }
 
 fn parse_duration(s: &str) -> Option<f64> {
-    // "01:30:50.50" or "00:01:30.50"
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() == 3 {
         let hours: f64 = parts[0].parse().ok()?;
@@ -85,19 +110,19 @@ pub fn extract_screenshots(
             continue;
         }
 
-        let status = Command::new("ffmpeg")
+        let status = ffmpeg_command()
             .args([
                 "-y",
                 "-ss",
-                &format!("{}", time_sec),
+                &format!("{:.3}", time_sec),
                 "-i",
                 &video_path.to_string_lossy(),
                 "-vframes",
                 "1",
                 "-q:v",
                 "3",
-                "-s",
-                "320x180",
+                "-vf",
+                "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
                 &output_path.to_string_lossy(),
             ])
             .status()
@@ -115,23 +140,22 @@ pub fn extract_thumbnail(video_path: &Path, output_path: &Path) -> Result<(), St
         return Ok(());
     }
 
-    // Try to grab frame at 10% of video
-    let duration = get_video_duration(video_path).unwrap_or(60.0);
-    let seek_time = (duration * 0.1).min(30.0);
+    let duration = get_video_duration(video_path).unwrap_or(60.0).max(1.0);
+    let seek_time = (duration * 0.3).clamp(0.1, duration.max(0.1) - 0.1);
 
-    let status = Command::new("ffmpeg")
+    let status = ffmpeg_command()
         .args([
             "-y",
             "-ss",
-            &format!("{}", seek_time),
+            &format!("{:.3}", seek_time),
             "-i",
             &video_path.to_string_lossy(),
             "-vframes",
             "1",
             "-q:v",
             "4",
-            "-s",
-            "320x180",
+            "-vf",
+            "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
             &output_path.to_string_lossy(),
         ])
         .status()
@@ -150,11 +174,15 @@ pub fn extract_audio_clip(
     duration_secs: f64,
     output_path: &Path,
 ) -> Result<(), String> {
-    let status = Command::new("ffmpeg")
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let status = ffmpeg_command()
         .args([
             "-y",
             "-ss",
-            &format!("{:.3}", start_sec),
+            &format!("{:.3}", start_sec.max(0.0)),
             "-i",
             &video_path.to_string_lossy(),
             "-t",
@@ -174,17 +202,5 @@ pub fn extract_audio_clip(
         Ok(())
     } else {
         Err("ffmpeg audio extraction failed".into())
-    }
-}
-
-pub fn has_audio_track(video_path: &Path) -> bool {
-    if let Ok(output) = Command::new("ffmpeg")
-        .args(["-i", &video_path.to_string_lossy()])
-        .output()
-    {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        stderr.contains("Audio:")
-    } else {
-        false
     }
 }
