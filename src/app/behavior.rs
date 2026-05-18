@@ -158,8 +158,8 @@ impl VideoTaggerApp {
             self.begin_edit_video(index, independent);
             return;
         }
-        if self.has_pending_annotation() {
-            self.apply_current_video_changes();
+        if self.has_pending_annotation() && !self.apply_current_video_changes() {
+            return;
         }
         self.begin_edit_video(index, independent);
     }
@@ -201,8 +201,8 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn exit_sorting(&mut self) {
-        if self.has_pending_annotation() {
-            self.apply_current_video_changes();
+        if self.has_pending_annotation() && !self.apply_current_video_changes() {
+            return;
         }
         self.reset_edit_state();
         self.independent_edit = None;
@@ -383,7 +383,7 @@ impl VideoTaggerApp {
         let next_category = (self.active_category_index + 1).min(self.tag_library.category_count());
         if next_category == self.tag_library.category_count() {
             self.active_category_index = next_category;
-            self.selected_tag_index = 1;
+            self.selected_tag_index = 0;
             self.clamp_category_cursor();
         } else {
             self.select_category(next_category);
@@ -420,21 +420,36 @@ impl VideoTaggerApp {
         self.video_list_follow_index = Some(next_idx);
     }
 
-    fn apply_current_video_changes(&mut self) {
-        if self.videos.is_empty() { return; }
+    fn apply_current_video_changes(&mut self) -> bool {
+        if self.videos.is_empty() { return false; }
         let video = self.videos[self.current_video_index].clone();
         let labels: Vec<String> = self.current_labels.iter().filter(|label| !label.trim().is_empty()).cloned().collect();
         let should_rename = !labels.is_empty() || self.is_starred;
 
-        if let Some(ref prog) = self.folder_progress {
-            let overwrite = self.config.shift_lock || self.pending_overwrite_once;
-            let new_name = config::format_video_name(&prog.identifier, self.current_video_index, prog.digit_count, &labels, self.is_starred, &video.filename, &video.extension, overwrite);
-            let parent = video.path.parent().unwrap_or(std::path::Path::new("."));
-            let mut final_path = parent.join(&new_name);
-
+        let Some(ref prog) = self.folder_progress else {
             if should_rename {
-                scanner::resolve_name_conflict(&mut final_path);
-                if std::fs::rename(&video.path, &final_path).is_ok() {
+                eprintln!("[video-tagger] save failed: folder progress is missing for {}", video.path.display());
+                return false;
+            }
+            return true;
+        };
+
+        let overwrite = self.config.shift_lock || self.pending_overwrite_once;
+        let new_name = config::format_video_name(&prog.identifier, self.current_video_index, prog.digit_count, &labels, self.is_starred, &video.filename, &video.extension, overwrite);
+        let parent = video.path.parent().unwrap_or(std::path::Path::new("."));
+        let mut final_path = parent.join(&new_name);
+
+        if should_rename {
+            scanner::resolve_name_conflict(&mut final_path);
+            match std::fs::rename(&video.path, &final_path) {
+                Ok(()) => {
+                    eprintln!(
+                        "[video-tagger] renamed: {} -> {} | labels={:?} | starred={}",
+                        video.path.display(),
+                        final_path.display(),
+                        labels,
+                        self.is_starred
+                    );
                     if let Some(updated) = self.videos.get_mut(self.current_video_index) {
                         updated.path = final_path.clone();
                         updated.filename = final_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(new_name);
@@ -445,22 +460,39 @@ impl VideoTaggerApp {
                     self.thumbnail_errors.remove(&self.current_video_index);
                     self.thumbnail_inflight.remove(&self.current_video_index);
                 }
+                Err(err) => {
+                    eprintln!(
+                        "[video-tagger] rename failed: {} -> {} | labels={:?} | starred={} | error={}",
+                        video.path.display(),
+                        final_path.display(),
+                        labels,
+                        self.is_starred,
+                        err
+                    );
+                    return false;
+                }
             }
-            if !labels.is_empty() {
-                self.tag_library.record_usage(&labels);
-                self.tag_library.save();
-            }
+        } else {
+            eprintln!("[video-tagger] no labels/star for {}, not renaming", video.path.display());
+        }
+
+        if !labels.is_empty() {
+            self.tag_library.record_usage(&labels);
+            self.tag_library.save();
         }
 
         if let Some(ref mut prog) = self.folder_progress {
             prog.last_processed = prog.last_processed.max(self.current_video_index + 1);
             if let Some(ref folder) = self.selected_folder { progress::save_progress(folder, prog); }
         }
+        true
     }
 
     pub(super) fn finalize_current_video(&mut self) {
         if self.videos.is_empty() { return; }
-        self.apply_current_video_changes();
+        if !self.apply_current_video_changes() {
+            return;
+        }
 
         let independent = self.independent_edit.is_some();
         let next_idx = self.current_video_index + 1;
