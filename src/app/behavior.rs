@@ -376,7 +376,15 @@ impl VideoTaggerApp {
         if let Some(label) = tags.get(self.selected_tag_index).cloned() {
             self.set_current_category_label(label);
         }
-        self.select_category((self.active_category_index + 1).min(self.tag_library.category_count()));
+
+        let next_category = (self.active_category_index + 1).min(self.tag_library.category_count());
+        if next_category == self.tag_library.category_count() {
+            self.active_category_index = next_category;
+            self.selected_tag_index = 1;
+            self.clamp_category_cursor();
+        } else {
+            self.select_category(next_category);
+        }
     }
 
     pub(super) fn play_selected_screenshot_audio(&mut self) {
