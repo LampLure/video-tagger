@@ -89,16 +89,17 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn enter_overview(&mut self) {
-        if let Some(ref folder) = self.selected_folder {
-            self.videos = scanner::scan_videos(folder);
-            self.clear_thumbnail_state();
-            self.overview_search.clear();
-            self.folder_progress = Some(progress::init_progress_for_folder(folder, &self.videos));
-            if let Some(ref prog) = self.folder_progress {
-                progress::save_progress(folder, prog);
-            }
-            self.app_mode = AppMode::Overview;
+        let Some(folder) = self.selected_folder.clone() else {
+            return;
+        };
+        self.videos = scanner::scan_videos(&folder);
+        self.clear_thumbnail_state();
+        self.overview_search.clear();
+        self.folder_progress = Some(progress::init_progress_for_folder(&folder, &self.videos));
+        if let Some(ref prog) = self.folder_progress {
+            progress::save_progress(&folder, prog);
         }
+        self.app_mode = AppMode::Overview;
     }
 
     pub(super) fn enter_sorting(&mut self) {
