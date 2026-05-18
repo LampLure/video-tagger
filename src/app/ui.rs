@@ -180,7 +180,7 @@ impl VideoTaggerApp {
     fn queue_thumbnail_if_needed(&mut self, video_idx: usize) {
         if !self.overview_thumbnails.contains_key(&video_idx)
             && !self.thumbnail_loaded.contains(&video_idx)
-            && !self.thumbnail_errors.contains(&video_idx)
+            && !self.thumbnail_errors.contains_key(&video_idx)
             && !self.thumbnail_inflight.contains(&video_idx)
         {
             self.thumbnail_queue.push_back(video_idx);
@@ -191,9 +191,10 @@ impl VideoTaggerApp {
     fn paint_thumbnail(&mut self, ui: &mut egui::Ui, rect: egui::Rect, video_idx: usize, loading_text: &str) {
         if let Some(texture) = self.overview_thumbnails.get(&video_idx) {
             ui.put(rect, egui::Image::new(texture).fit_to_exact_size(rect.size()));
-        } else if self.thumbnail_errors.contains(&video_idx) {
+        } else if let Some(reason) = self.thumbnail_errors.get(&video_idx) {
             ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(70, 30, 30));
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Error", egui::FontId::proportional(14.0), Color32::LIGHT_RED);
+            ui.painter().text(rect.center_top() + egui::vec2(0.0, 16.0), egui::Align2::CENTER_TOP, "Error", egui::FontId::proportional(14.0), Color32::LIGHT_RED);
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, reason.chars().take(42).collect::<String>(), egui::FontId::proportional(10.0), Color32::from_rgb(230, 170, 170));
         } else {
             ui.painter().rect_filled(rect, 3.0, Color32::from_gray(45));
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, loading_text, egui::FontId::proportional(12.0), Color32::from_gray(150));
@@ -217,13 +218,13 @@ impl VideoTaggerApp {
                             let texture = ctx.load_texture(format!("thumb_{}", index), egui::ImageData::Color(color_img.into()), egui::TextureOptions::LINEAR);
                             self.overview_thumbnails.insert(index, texture);
                         } else {
-                            self.thumbnail_errors.insert(index);
+                            self.thumbnail_errors.insert(index, "图片解码失败".to_string());
                         }
                         changed = true;
                     }
-                    Ok(ThumbnailResult::Failed { index }) => {
+                    Ok(ThumbnailResult::Failed { index, reason }) => {
                         self.thumbnail_inflight.remove(&index);
-                        self.thumbnail_errors.insert(index);
+                        self.thumbnail_errors.insert(index, reason);
                         changed = true;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -251,7 +252,7 @@ impl VideoTaggerApp {
                 })();
                 let _ = match result {
                     Ok(bytes) => tx.send(ThumbnailResult::Loaded { index: video_idx, bytes }),
-                    Err(_) => tx.send(ThumbnailResult::Failed { index: video_idx }),
+                    Err(reason) => tx.send(ThumbnailResult::Failed { index: video_idx, reason }),
                 };
             });
         }
@@ -426,20 +427,20 @@ impl VideoTaggerApp {
                 let processed = self.is_processed(i);
                 let name = self.videos[i].filename.clone();
                 let fill = if is_current { Color32::from_rgb(60, 100, 180) } else if processed { Color32::from_rgb(35, 70, 35) } else { Color32::from_gray(32) };
-                egui::Frame::NONE.fill(fill).inner_margin(4.0).show(ui, |ui| {
-                    let response = ui.allocate_ui_with_layout(
+                let inner = egui::Frame::NONE.fill(fill).inner_margin(4.0).show(ui, |ui| {
+                    ui.allocate_ui_with_layout(
                         Vec2::new(ui.available_width(), 120.0),
                         egui::Layout::top_down(egui::Align::Center),
                         |ui| {
-                            let (rect, image_resp) = ui.allocate_exact_size(Vec2::new(132.0, 74.0), egui::Sense::click());
+                            let (rect, _image_resp) = ui.allocate_exact_size(Vec2::new(132.0, 74.0), egui::Sense::hover());
                             self.paint_thumbnail(ui, rect, i, "...");
                             ui.label(RichText::new(format!("{}{}", if is_current { "▶ " } else { "" }, i + 1)).strong());
                             ui.add_sized([ui.available_width(), 28.0], egui::Label::new(RichText::new(name).small()).truncate());
-                            image_resp
                         },
-                    ).response;
-                    if response.clicked() { clicked = Some(i); }
+                    );
                 });
+                let response = inner.response.interact(egui::Sense::click());
+                if response.clicked() { clicked = Some(i); }
                 ui.add_space(6.0);
             }
         });
