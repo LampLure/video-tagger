@@ -71,14 +71,23 @@ impl TagLibrary {
         }
     }
 
+    pub fn entries_in_saved_order(&self) -> Vec<&TagEntry> {
+        self.entries.iter().collect()
+    }
+
+    pub fn names_in_saved_order(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect()
+    }
+
     pub fn sorted_entries(&self) -> Vec<&TagEntry> {
         let now = chrono::Utc::now();
         let mut entries: Vec<&TagEntry> = self.entries.iter().collect();
         entries.sort_by(|a, b| {
-            // Score: use_count * decay_factor based on last_used time
             let score_a = decay_score(a, now);
             let score_b = decay_score(b, now);
-            // Higher score first
             match score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal) {
                 std::cmp::Ordering::Equal => a.name.cmp(&b.name),
                 other => other,
@@ -92,6 +101,14 @@ impl TagLibrary {
             .into_iter()
             .map(|e| e.name.clone())
             .collect()
+    }
+
+    pub fn names_for_display(&self, locked: bool) -> Vec<String> {
+        if locked {
+            self.names_in_saved_order()
+        } else {
+            self.sorted_names()
+        }
     }
 }
 
