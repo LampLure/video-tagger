@@ -97,17 +97,17 @@ impl TagLibrary {
     }
 
     pub fn sorted_names(&self) -> Vec<String> {
-        self.sorted_entries()
-            .into_iter()
-            .map(|e| e.name.clone())
-            .collect()
+        self.names_for_display(crate::config::AppConfig::load().tag_position_lock)
     }
 
     pub fn names_for_display(&self, locked: bool) -> Vec<String> {
         if locked {
             self.names_in_saved_order()
         } else {
-            self.sorted_names()
+            self.sorted_entries()
+                .into_iter()
+                .map(|e| e.name.clone())
+                .collect()
         }
     }
 }
