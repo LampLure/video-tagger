@@ -37,6 +37,7 @@ impl VideoTaggerApp {
         self.show_star_hint = false;
         self.playing_screenshot = None;
         self.screenshot_error = None;
+        self.screenshot_loading = false;
         self.audio_player.stop();
     }
 
@@ -145,17 +146,44 @@ impl VideoTaggerApp {
         if self.videos.is_empty() {
             return;
         }
-        let duration = self.videos[self.current_video_index].ensure_duration();
         self.screenshot_start_sec = 0.0;
-        self.extract_current_screenshots(duration);
+        self.request_current_screenshots();
     }
 
-    pub(super) fn extract_current_screenshots(&mut self, duration: f64) {
+    pub(super) fn request_current_screenshots(&mut self) {
+        if self.videos.is_empty() {
+            return;
+        }
         let video_path = self.videos[self.current_video_index].path.clone();
-        let paths = self.screenshot_cache.get_or_extract_screenshots(&video_path, self.screenshot_start_sec, self.screenshot_interval, 10, duration);
-        self.screenshot_error = if paths.is_empty() { Some("Error: 无法读取该视频或 ffmpeg 截图失败".to_string()) } else { None };
-        self.screenshot_paths = paths;
+        let duration = self.videos[self.current_video_index].ensure_duration();
+        let start_sec = self.screenshot_start_sec;
+        let interval = self.screenshot_interval;
+        let request_id = self.screenshot_request_id.wrapping_add(1);
+        self.screenshot_request_id = request_id;
+        self.screenshot_loading = true;
+        self.screenshot_error = None;
+        self.screenshot_paths.clear();
         self.screenshot_textures.clear();
+
+        let tx = self.screenshot_tx.clone();
+        std::thread::spawn(move || {
+            let hash = ScreenshotCache::video_hash(&video_path);
+            let output_dir = config::cache_dir().join("screens").join(hash);
+            let count = 10usize;
+            let remaining = (duration - start_sec).max(0.0);
+            let effective_interval = if duration > 0.0 && (duration < interval * count as f64 || remaining < interval * count as f64) {
+                (remaining / count as f64).max(0.1)
+            } else {
+                interval.max(0.1)
+            };
+            let prefix = format!("r{}_i{}", (start_sec * 10.0) as u64, (effective_interval * 1000.0) as u64);
+            let result = ffmpeg::extract_screenshots(&video_path, start_sec, effective_interval, count, &output_dir, &prefix);
+            let _ = match result {
+                Ok(paths) if !paths.is_empty() => tx.send(ScreenshotResult::Loaded { request_id, paths }),
+                Ok(_) => tx.send(ScreenshotResult::Failed { request_id, reason: "ffmpeg 截图为空".to_string() }),
+                Err(reason) => tx.send(ScreenshotResult::Failed { request_id, reason }),
+            };
+        });
     }
 
     pub(super) fn advance_screenshots(&mut self, backward: bool) {
@@ -170,7 +198,7 @@ impl VideoTaggerApp {
             let max_start = if duration <= step { 0.0 } else { ((duration - 0.001) / step).floor() * step };
             self.screenshot_start_sec = (self.screenshot_start_sec + step).min(max_start);
         }
-        self.extract_current_screenshots(duration);
+        self.request_current_screenshots();
     }
 
     pub(super) fn add_label(&mut self, label: String) {
