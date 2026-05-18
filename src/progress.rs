@@ -23,25 +23,29 @@ pub fn save_progress(folder: &PathBuf, progress: &FolderProgress) {
     }
 }
 
+pub fn detect_identifier_from_filenames(videos: &[VideoFile]) -> Option<String> {
+    let mut counts = std::collections::HashMap::<String, usize>::new();
+    for video in videos {
+        if let Some(parsed) = config::parse_video_name(&video.filename) {
+            *counts.entry(parsed.identifier).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
+        .map(|(identifier, _)| identifier)
+}
+
 pub fn detect_progress_from_filenames(
     videos: &[VideoFile],
     identifier: &str,
 ) -> Option<(usize, usize)> {
-    // Find the maximum processed index from filenames matching the identifier
     let mut max_index: Option<usize> = None;
 
     for video in videos {
-        let name = &video.filename;
-        if name.starts_with(&format!("[{}]", identifier)) {
-            // Try to extract the numeric index
-            if let Some(num_part) = name.split(']').nth(1) {
-                let num_str: String = num_part
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect();
-                if let Ok(idx) = num_str.parse::<usize>() {
-                    max_index = Some(max_index.map_or(idx, |m| m.max(idx)));
-                }
+        if let Some(parsed) = config::parse_video_name(&video.filename) {
+            if parsed.identifier == identifier {
+                max_index = Some(max_index.map_or(parsed.index, |m| m.max(parsed.index)));
             }
         }
     }
@@ -49,16 +53,26 @@ pub fn detect_progress_from_filenames(
     max_index.map(|idx| (idx, videos.len()))
 }
 
-pub fn init_progress(videos: &[VideoFile], identifier: &str) -> FolderProgress {
+pub fn init_progress(folder: &PathBuf, videos: &[VideoFile]) -> FolderProgress {
     let digit_count = config::compute_digit_count(videos.len());
 
-    // Check filenames for existing progress
-    let last_processed = detect_progress_from_filenames(videos, identifier)
+    if let Some(mut progress) = load_progress(folder) {
+        progress.digit_count = progress.digit_count.max(digit_count);
+        progress.video_count = videos.len();
+        if let Some((last_processed, _)) = detect_progress_from_filenames(videos, &progress.identifier) {
+            progress.last_processed = progress.last_processed.max(last_processed);
+        }
+        return progress;
+    }
+
+    let identifier = detect_identifier_from_filenames(videos)
+        .unwrap_or_else(|| config::generate_identifier_for_folder(folder));
+    let last_processed = detect_progress_from_filenames(videos, &identifier)
         .map(|(idx, _)| idx)
         .unwrap_or(0);
 
     FolderProgress {
-        identifier: identifier.into(),
+        identifier,
         digit_count,
         last_processed,
         video_count: videos.len(),
