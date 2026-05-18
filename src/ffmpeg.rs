@@ -105,13 +105,16 @@ pub fn extract_screenshots(
         let time_sec = start_sec + (i as f64) * interval;
         let output_path = output_dir.join(format!("{}_{:04}.png", prefix, i));
 
-        if output_path.exists() {
+        if usable_image_file(&output_path) {
             paths.push(output_path);
             continue;
         }
 
         let status = ffmpeg_command()
             .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 "-y",
                 "-ss",
                 &format!("{:.3}", time_sec),
@@ -128,44 +131,67 @@ pub fn extract_screenshots(
             .status()
             .map_err(|e| format!("ffmpeg error: {}", e))?;
 
-        if status.success() {
+        if status.success() && usable_image_file(&output_path) {
             paths.push(output_path);
         }
     }
     Ok(paths)
 }
 
+fn usable_image_file(path: &Path) -> bool {
+    std::fs::metadata(path).map(|m| m.is_file() && m.len() > 1024).unwrap_or(false)
+}
+
+fn run_thumbnail_seek(video_path: &Path, seek_time: f64, output_path: &Path, accurate: bool) -> bool {
+    let mut cmd = ffmpeg_command();
+    cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-y");
+    if !accurate {
+        cmd.arg("-ss").arg(format!("{:.3}", seek_time));
+    }
+    cmd.arg("-i").arg(video_path);
+    if accurate {
+        cmd.arg("-ss").arg(format!("{:.3}", seek_time));
+    }
+    cmd.args([
+        "-an",
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        "-vf",
+        "thumbnail=24,scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
+    ]);
+    cmd.arg(output_path);
+
+    cmd.status().map(|s| s.success()).unwrap_or(false) && usable_image_file(output_path)
+}
+
 pub fn extract_thumbnail(video_path: &Path, output_path: &Path) -> Result<(), String> {
-    if output_path.exists() {
+    if usable_image_file(output_path) {
         return Ok(());
+    }
+    if output_path.exists() {
+        let _ = std::fs::remove_file(output_path);
+    }
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let duration = get_video_duration(video_path).unwrap_or(60.0).max(1.0);
-    let seek_time = (duration * 0.3).clamp(0.1, duration.max(0.1) - 0.1);
-
-    let status = ffmpeg_command()
-        .args([
-            "-y",
-            "-ss",
-            &format!("{:.3}", seek_time),
-            "-i",
-            &video_path.to_string_lossy(),
-            "-vframes",
-            "1",
-            "-q:v",
-            "4",
-            "-vf",
-            "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2",
-            &output_path.to_string_lossy(),
-        ])
-        .status()
-        .map_err(|e| format!("ffmpeg error: {}", e))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("ffmpeg thumbnail extraction failed".into())
+    let mut candidates = Vec::new();
+    for ratio in [0.10, 0.25, 0.40, 0.55, 0.70] {
+        candidates.push((duration * ratio).clamp(0.1, (duration - 0.1).max(0.1)));
     }
+    candidates.push(1.0_f64.min((duration - 0.1).max(0.1)));
+
+    for seek in candidates {
+        if run_thumbnail_seek(video_path, seek, output_path, false) || run_thumbnail_seek(video_path, seek, output_path, true) {
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(output_path);
+    }
+
+    Err("ffmpeg thumbnail extraction failed".into())
 }
 
 pub fn extract_audio_clip(
@@ -180,6 +206,9 @@ pub fn extract_audio_clip(
 
     let status = ffmpeg_command()
         .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
             "-y",
             "-ss",
             &format!("{:.3}", start_sec.max(0.0)),
