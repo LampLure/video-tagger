@@ -455,7 +455,9 @@ impl VideoTaggerApp {
 
     pub(super) fn render_sorting(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let available = ui.available_size();
-        let list_width = 240.0_f32.min((available.x * 0.20).max(200.0));
+        let ideal_list_width = (available.x * 0.26).clamp(300.0, 430.0);
+        let max_list_width = (available.x - 760.0).max(270.0);
+        let list_width = ideal_list_width.min(max_list_width);
         let left_width = (available.x - list_width - 16.0).max(1.0);
         let left_height = available.y.max(1.0);
 
@@ -550,12 +552,14 @@ impl VideoTaggerApp {
         let gap = 6.0;
         let width_limited_cell_w = ((ui.available_width() - gap * 4.0) / cols as f32).max(120.0);
         let grid_height = (desired_height - 36.0).max(180.0);
-        let cell_h = ((grid_height - gap) / 2.0).clamp(120.0, 300.0);
         let cell_w = width_limited_cell_w.clamp(120.0, 380.0);
+        let height_limited_cell_h = ((grid_height - gap) / 2.0).max(90.0);
+        let aspect_limited_cell_h = cell_w * 0.72;
+        let cell_h = height_limited_cell_h.min(aspect_limited_cell_h).clamp(90.0, 260.0);
         let shown_interval = self.current_effective_interval();
 
         panel_frame().show(ui, |ui| {
-            ui.set_min_height(desired_height.max(cell_h * 2.0 + gap + 24.0));
+            ui.set_min_height((cell_h * 2.0 + gap + 24.0).max(220.0));
             ui.vertical(|ui| {
                 for row in 0..2 {
                     ui.horizontal(|ui| {
@@ -727,7 +731,7 @@ impl VideoTaggerApp {
         ui.separator();
         ui.add_space(6.0);
         let mut clicked: Option<usize> = None;
-        let row_h = 142.0;
+        let row_h = 178.0;
         let rows = self.videos.len();
         egui::ScrollArea::vertical()
             .id_salt("video_list_scroll")
@@ -752,14 +756,17 @@ impl VideoTaggerApp {
                     } else {
                         Color32::from_gray(35)
                     };
+                    let thumb_w = (w - 42.0).clamp(150.0, 240.0);
+                    let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
+                    let card_h = (thumb_h + 72.0).max(150.0);
                     let inner = card_frame(fill, stroke).show(ui, |ui| {
                         ui.allocate_ui_with_layout(
-                            Vec2::new((w - 14.0).max(1.0), 125.0),
+                            Vec2::new((w - 18.0).max(1.0), card_h),
                             egui::Layout::top_down(egui::Align::Center),
                             |ui| {
-                                let (rect, _image_resp) = ui.allocate_exact_size(Vec2::new(132.0, 74.0), egui::Sense::hover());
+                                let (rect, _image_resp) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
                                 self.paint_thumbnail(ui, rect, i, "...");
-                                ui.add_space(4.0);
+                                ui.add_space(6.0);
                                 let status_text = if is_current {
                                     format!("> 第 {} 个 (当前)", i + 1)
                                 } else if processed {
@@ -775,8 +782,8 @@ impl VideoTaggerApp {
                                     Color32::from_gray(160)
                                 };
                                 ui.label(RichText::new(status_text).small().strong().color(status_color));
-                                ui.add_space(2.0);
-                                ui.add_sized([(w - 20.0).max(1.0), 18.0], egui::Label::new(RichText::new(name).small().color(Color32::from_gray(210))).truncate());
+                                ui.add_space(3.0);
+                                ui.add_sized([(w - 28.0).max(1.0), 22.0], egui::Label::new(RichText::new(name).small().color(Color32::from_gray(210))).truncate());
                             },
                         );
                     });
