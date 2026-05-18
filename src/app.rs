@@ -36,7 +36,8 @@ pub enum ThumbnailResult {
 }
 
 pub enum ScreenshotResult {
-    Loaded { request_id: u64, paths: Vec<PathBuf> },
+    Loaded { request_id: u64, key: String, paths: Vec<PathBuf> },
+    Prefetched { key: String, paths: Vec<PathBuf> },
     Failed { request_id: u64, reason: String },
 }
 
