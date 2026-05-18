@@ -182,9 +182,9 @@ impl VideoTaggerApp {
             && !self.thumbnail_loaded.contains(&video_idx)
             && !self.thumbnail_errors.contains_key(&video_idx)
             && !self.thumbnail_inflight.contains(&video_idx)
+            && !self.thumbnail_queue.contains(&video_idx)
         {
             self.thumbnail_queue.push_back(video_idx);
-            self.thumbnail_inflight.insert(video_idx);
         }
     }
 
@@ -240,7 +240,15 @@ impl VideoTaggerApp {
         let max_new_jobs = 2usize.saturating_sub(self.thumbnail_inflight.len().min(2));
         for _ in 0..max_new_jobs {
             let Some(video_idx) = self.thumbnail_queue.pop_front() else { break; };
+            if self.overview_thumbnails.contains_key(&video_idx)
+                || self.thumbnail_loaded.contains(&video_idx)
+                || self.thumbnail_errors.contains_key(&video_idx)
+                || self.thumbnail_inflight.contains(&video_idx)
+            {
+                continue;
+            }
             let Some(video) = self.videos.get(video_idx).cloned() else { continue; };
+            self.thumbnail_inflight.insert(video_idx);
             let tx = self.thumbnail_tx.clone();
             let video_hash = ScreenshotCache::video_hash(&video.path);
             let thumb_path = config::cache_dir().join("thumbs").join(format!("thumb_{}.png", video_hash));
