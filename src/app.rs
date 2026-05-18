@@ -32,7 +32,7 @@ pub enum SortMode {
 
 pub enum ThumbnailResult {
     Loaded { index: usize, bytes: Vec<u8> },
-    Failed { index: usize },
+    Failed { index: usize, reason: String },
 }
 
 pub struct VideoTaggerApp {
@@ -51,7 +51,7 @@ pub struct VideoTaggerApp {
     overview_thumbnails: HashMap<usize, egui::TextureHandle>,
     thumbnail_queue: VecDeque<usize>,
     thumbnail_loaded: HashSet<usize>,
-    thumbnail_errors: HashSet<usize>,
+    thumbnail_errors: HashMap<usize, String>,
     thumbnail_inflight: HashSet<usize>,
     thumbnail_rx: Option<mpsc::Receiver<ThumbnailResult>>,
     thumbnail_tx: mpsc::Sender<ThumbnailResult>,
@@ -104,7 +104,7 @@ impl Default for VideoTaggerApp {
             overview_thumbnails: HashMap::new(),
             thumbnail_queue: VecDeque::new(),
             thumbnail_loaded: HashSet::new(),
-            thumbnail_errors: HashSet::new(),
+            thumbnail_errors: HashMap::new(),
             thumbnail_inflight: HashSet::new(),
             thumbnail_rx: Some(thumbnail_rx),
             thumbnail_tx,
