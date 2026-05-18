@@ -89,13 +89,8 @@ enum AiModelDecision {
     NeedMore { reason: String, working_summary: Value },
 }
 
-pub fn models_dir() -> PathBuf {
-    config::app_data_dir().join("models")
-}
-
-pub fn logs_dir() -> PathBuf {
-    config::app_data_dir().join("logs")
-}
+pub fn models_dir() -> PathBuf { config::app_data_dir().join("models") }
+pub fn logs_dir() -> PathBuf { config::app_data_dir().join("logs") }
 
 pub fn ensure_models_dir() -> PathBuf {
     let dir = models_dir();
@@ -109,18 +104,10 @@ pub fn list_model_scripts() -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
+            if !path.is_file() { continue; }
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
-            let ok = if cfg!(windows) {
-                ext == "bat" || ext == "cmd"
-            } else {
-                ext == "sh"
-            };
-            if ok {
-                scripts.push(path);
-            }
+            let ok = if cfg!(windows) { ext == "bat" || ext == "cmd" } else { ext == "sh" };
+            if ok { scripts.push(path); }
         }
     }
     scripts.sort();
@@ -138,9 +125,7 @@ pub fn probe_llama_props(timeout: Duration) -> Result<AiServiceProps, String> {
 }
 
 pub fn start_model_script(path: &Path) -> Result<Child, String> {
-    if !path.exists() {
-        return Err("模型启动脚本不存在".into());
-    }
+    if !path.exists() { return Err("模型启动脚本不存在".into()); }
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(path);
@@ -206,26 +191,18 @@ pub fn default_ai_text_settings() -> String {
 pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
     let root: Value = serde_json::from_str(text).map_err(|e| format!("AI 文本设置 JSON 无效: {}", e))?;
     let groups_value = root.get("tag_groups").and_then(Value::as_object).ok_or_else(|| "AI 文本设置缺少 tag_groups 对象".to_string())?;
-    if groups_value.is_empty() {
-        return Err("tag_groups 不能为空".into());
-    }
+    if groups_value.is_empty() { return Err("tag_groups 不能为空".into()); }
     let mut tag_groups = Vec::new();
     for (group_name, group_value) in groups_value.iter() {
         let max_select = group_value.get("max_select").and_then(Value::as_u64).ok_or_else(|| format!("tag_groups.{}.max_select 必须是非负整数", group_name))? as usize;
         let tags_arr = group_value.get("tags").and_then(Value::as_array).ok_or_else(|| format!("tag_groups.{}.tags 必须是字符串数组", group_name))?;
-        if tags_arr.is_empty() {
-            return Err(format!("tag_groups.{}.tags 不能为空", group_name));
-        }
+        if tags_arr.is_empty() { return Err(format!("tag_groups.{}.tags 不能为空", group_name)); }
         let mut tags = Vec::new();
         let mut seen = HashSet::new();
         for item in tags_arr {
             let tag = item.as_str().ok_or_else(|| format!("tag_groups.{}.tags 中存在非字符串标签", group_name))?.trim().to_string();
-            if tag.is_empty() {
-                return Err(format!("tag_groups.{}.tags 中存在空标签", group_name));
-            }
-            if seen.insert(tag.clone()) {
-                tags.push(tag);
-            }
+            if tag.is_empty() { return Err(format!("tag_groups.{}.tags 中存在空标签", group_name)); }
+            if seen.insert(tag.clone()) { tags.push(tag); }
         }
         tag_groups.push(TagGroupSchema { name: group_name.clone(), max_select, tags });
     }
@@ -240,9 +217,7 @@ pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
                 other => return Err(format!("score_rules.{} direction 无效: {}", name, other)),
             };
             let max_delta = rule.get("max_delta").and_then(Value::as_i64).ok_or_else(|| format!("score_rules.{}.max_delta 必须是整数", name))? as i32;
-            if max_delta < 0 || max_delta > 100 {
-                return Err(format!("score_rules.{}.max_delta 必须在 0-100", name));
-            }
+            if max_delta < 0 || max_delta > 100 { return Err(format!("score_rules.{}.max_delta 必须在 0-100", name)); }
             score_rules.push(ScoreRuleSchema { name, direction, max_delta });
         }
     }
@@ -252,9 +227,7 @@ pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
 pub fn spawn_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) {
     std::thread::spawn(move || {
         let result = run_video_analysis(job.clone(), tx.clone());
-        if let Err(reason) = result {
-            let _ = tx.send(AiEvent::Failed { work_id: job.work_id, reason });
-        }
+        if let Err(reason) = result { let _ = tx.send(AiEvent::Failed { work_id: job.work_id, reason }); }
     });
 }
 
@@ -401,7 +374,7 @@ need_more_samples JSON 格式：
 }
 
 fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], idle_timeout_seconds: u64) -> Result<String, String> {
-    let client = Client::builder().read_timeout(Duration::from_secs(idle_timeout_seconds.max(1))).connect_timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
+    let client = Client::builder().timeout(Duration::from_secs(idle_timeout_seconds.max(1))).connect_timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
     let mut content = Vec::new();
     content.push(json!({ "type": "text", "text": prompt }));
     for path in image_paths {
