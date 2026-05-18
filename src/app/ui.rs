@@ -639,7 +639,9 @@ impl VideoTaggerApp {
         let tag_names = self.tag_library.sorted_names();
         let cols = 9;
         let rows = 3;
+        let remaining_h = ui.available_height().max(160.0);
         panel_frame().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.set_min_height((remaining_h - 2.0).max(160.0));
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("快捷标签面板").strong().color(Color32::WHITE));
