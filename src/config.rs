@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoFile {
     pub path: PathBuf,
@@ -33,6 +37,8 @@ pub struct AppConfig {
     pub shift_lock: bool,
     #[serde(default)]
     pub tag_position_lock: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
     pub last_folder: Option<PathBuf>,
     pub tag_library: Vec<TagDef>,
 }
@@ -59,6 +65,7 @@ impl Default for AppConfig {
             screenshot_interval: 10.0,
             shift_lock: false,
             tag_position_lock: false,
+            ui_scale: 1.0,
             last_folder: None,
             tag_library: Vec::new(),
         }
@@ -68,14 +75,16 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn load() -> Self {
         let path = config_path();
-        if path.exists() {
+        let mut config = if path.exists() {
             std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
         } else {
             Self::default()
-        }
+        };
+        config.ui_scale = config.ui_scale.clamp(0.5, 3.0);
+        config
     }
 
     pub fn save(&self) {
