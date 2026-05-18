@@ -70,26 +70,28 @@ impl VideoTaggerApp {
         self.app_mode = AppMode::Sorting;
     }
 
+    pub(super) fn clear_thumbnail_state(&mut self) {
+        self.overview_thumbnails.clear();
+        self.thumbnail_queue.clear();
+        self.thumbnail_loaded.clear();
+        self.thumbnail_errors.clear();
+        self.thumbnail_inflight.clear();
+    }
+
     pub(super) fn pick_folder(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
             self.selected_folder = Some(path);
             self.app_mode = AppMode::Fresh;
             self.videos.clear();
             self.folder_progress = None;
-            self.overview_thumbnails.clear();
-            self.thumbnail_loaded.clear();
-            self.thumbnail_errors.clear();
-            self.thumbnail_queue.clear();
+            self.clear_thumbnail_state();
         }
     }
 
     pub(super) fn enter_overview(&mut self) {
         if let Some(ref folder) = self.selected_folder {
             self.videos = scanner::scan_videos(folder);
-            self.overview_thumbnails.clear();
-            self.thumbnail_queue.clear();
-            self.thumbnail_loaded.clear();
-            self.thumbnail_errors.clear();
+            self.clear_thumbnail_state();
             self.overview_search.clear();
             self.folder_progress = Some(progress::init_progress_for_folder(folder, &self.videos));
             if let Some(ref prog) = self.folder_progress {
@@ -145,7 +147,6 @@ impl VideoTaggerApp {
         let duration = self.videos[self.current_video_index].ensure_duration();
         self.screenshot_start_sec = 0.0;
         self.extract_current_screenshots(duration);
-        self.prefetch_nearby_screenshots();
     }
 
     pub(super) fn extract_current_screenshots(&mut self, duration: f64) {
@@ -169,20 +170,6 @@ impl VideoTaggerApp {
             self.screenshot_start_sec = (self.screenshot_start_sec + step).min(max_start);
         }
         self.extract_current_screenshots(duration);
-        self.prefetch_nearby_screenshots();
-    }
-
-    fn prefetch_nearby_screenshots(&mut self) {
-        if self.videos.is_empty() {
-            return;
-        }
-        let start = self.current_video_index.saturating_sub(5);
-        let end = (self.current_video_index + 5).min(self.videos.len().saturating_sub(1));
-        for idx in start..=end {
-            let duration = self.videos[idx].ensure_duration();
-            let path = self.videos[idx].path.clone();
-            let _ = self.screenshot_cache.get_or_extract_screenshots(&path, 0.0, self.screenshot_interval, 10, duration);
-        }
     }
 
     pub(super) fn add_label(&mut self, label: String) {
@@ -246,6 +233,7 @@ impl VideoTaggerApp {
                     self.overview_thumbnails.remove(&self.current_video_index);
                     self.thumbnail_loaded.remove(&self.current_video_index);
                     self.thumbnail_errors.remove(&self.current_video_index);
+                    self.thumbnail_inflight.remove(&self.current_video_index);
                 }
             }
             if !self.current_labels.is_empty() {
