@@ -98,6 +98,7 @@ pub struct VideoTaggerApp {
     ffmpeg_custom_path: String,
     ffmpeg_dialog_open: bool,
     ui_scale_percent_input: String,
+    video_list_follow_index: Option<usize>,
 }
 
 impl Default for VideoTaggerApp {
@@ -162,6 +163,7 @@ impl Default for VideoTaggerApp {
             ffmpeg_custom_path: String::new(),
             ffmpeg_dialog_open: false,
             ui_scale_percent_input,
+            video_list_follow_index: None,
         }
     }
 }
