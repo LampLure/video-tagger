@@ -68,13 +68,10 @@ impl ScreenshotCache {
         let effective_interval = Self::effective_interval(start_sec, interval, count, video_duration);
         let range_key = format!("{}_{}", (start_sec * 10.0) as u64, (effective_interval * 1000.0) as u64);
 
-        let cached_paths: Option<Vec<PathBuf>> = {
-            if let Some(entry) = self.video_cache.get(&hash) {
-                entry.screenshot_paths.get(&range_key).cloned()
-            } else {
-                None
-            }
-        };
+        let cached_paths = self
+            .video_cache
+            .get(&hash)
+            .and_then(|entry| entry.screenshot_paths.get(&range_key).cloned());
 
         if let Some(paths) = cached_paths {
             self.touch_lru(&hash);
@@ -92,13 +89,6 @@ impl ScreenshotCache {
         )
         .unwrap_or_default();
 
-        let mut total_size: u64 = 0;
-        for p in &paths {
-            if let Ok(meta) = std::fs::metadata(p) {
-                total_size += meta.len();
-            }
-        }
-
         let entry = self.video_cache.entry(hash.clone()).or_insert(VideoCacheEntry {
             screenshot_paths: HashMap::new(),
             total_size: 0,
@@ -112,11 +102,7 @@ impl ScreenshotCache {
             .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
             .sum();
 
-        self.current_size = self
-            .video_cache
-            .values()
-            .map(|entry| entry.total_size)
-            .sum();
+        self.current_size = self.video_cache.values().map(|entry| entry.total_size).sum();
         self.touch_lru(&hash);
         self.evict_excess();
 
@@ -139,13 +125,5 @@ impl ScreenshotCache {
                 }
             }
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.video_cache.clear();
-        self.lru_order.clear();
-        self.current_size = 0;
-        let _ = std::fs::remove_dir_all(&self.base_dir);
-        let _ = std::fs::create_dir_all(&self.base_dir);
     }
 }
