@@ -78,9 +78,7 @@ impl VideoTaggerApp {
                     ui.label(RichText::new("当前视频").strong());
                     ui.label(RichText::new(&video.filename).small());
                     let dur = video.duration_secs.unwrap_or(0.0);
-                    if dur > 0.0 {
-                        ui.label(format!("时长: {:.1}s", dur));
-                    }
+                    if dur > 0.0 { ui.label(format!("时长: {:.1}s", dur)); }
                     let end = self.screenshot_start_sec + self.current_effective_interval() * 9.0;
                     ui.label(format!("截图: {:.1}s - {:.1}s", self.screenshot_start_sec, end));
                     ui.label(RichText::new("R 后移 / Shift+R 回退").small());
@@ -129,40 +127,31 @@ impl VideoTaggerApp {
         ui.add_space(8.0);
 
         let filtered = self.sorted_filtered_indices();
-        let thumb_w = 190.0;
-        let thumb_h = 142.0;
+        let card_w = 210.0;
+        let thumb_size = Vec2::new(190.0, 112.0);
         let spacing = 10.0;
-        let cols = (ui.available_width() / (thumb_w + spacing)).max(1.0) as usize;
-        let total_rows = (filtered.len() + cols - 1) / cols;
-        let row_height = thumb_h + 58.0 + spacing;
+        let cols = (ui.available_width() / (card_w + spacing)).max(1.0) as usize;
 
         egui::ScrollArea::vertical().id_salt("overview_scroll").show(ui, |ui| {
-            let visible_rect = ui.clip_rect();
-            let first_row = (visible_rect.top() / row_height).max(0.0) as usize;
-            let last_row = ((visible_rect.bottom() / row_height).ceil() as usize + 1).min(total_rows);
-            ui.add_space(first_row as f32 * row_height);
-            for row in first_row..last_row {
+            for chunk in filtered.chunks(cols) {
                 ui.horizontal(|ui| {
-                    for col in 0..cols {
-                        let idx = row * cols + col;
-                        if idx >= filtered.len() { break; }
-                        self.render_thumbnail_card(ui, filtered[idx], Vec2::new(thumb_w, thumb_h));
+                    for &video_idx in chunk {
+                        self.render_thumbnail_card(ui, video_idx, thumb_size, card_w);
                     }
                 });
                 ui.add_space(spacing);
             }
-            ui.add_space(total_rows.saturating_sub(last_row) as f32 * row_height);
         });
     }
 
-    fn render_thumbnail_card(&mut self, ui: &mut egui::Ui, video_idx: usize, thumb_size: Vec2) {
+    fn render_thumbnail_card(&mut self, ui: &mut egui::Ui, video_idx: usize, thumb_size: Vec2, card_w: f32) {
         let filename = self.videos[video_idx].filename.clone();
         let processed = self.is_processed(video_idx);
         let mut open_edit = false;
         egui::Frame::group(ui.style())
             .fill(if processed { Color32::from_rgb(35, 48, 35) } else { Color32::from_gray(28) })
             .show(ui, |ui| {
-                ui.set_width(thumb_size.x);
+                ui.set_width(card_w);
                 let (rect, response) = ui.allocate_exact_size(thumb_size, egui::Sense::click());
                 self.paint_thumbnail(ui, rect, video_idx, "加载中");
                 if response.double_clicked() { open_edit = true; }
@@ -177,9 +166,10 @@ impl VideoTaggerApp {
         if !self.overview_thumbnails.contains_key(&video_idx)
             && !self.thumbnail_loaded.contains(&video_idx)
             && !self.thumbnail_errors.contains(&video_idx)
+            && !self.thumbnail_inflight.contains(&video_idx)
         {
             self.thumbnail_queue.push_back(video_idx);
-            self.thumbnail_loaded.insert(video_idx);
+            self.thumbnail_inflight.insert(video_idx);
         }
     }
 
@@ -196,27 +186,60 @@ impl VideoTaggerApp {
         }
     }
 
-    pub(super) fn process_thumbnail_queue(&mut self, ctx: &egui::Context) {
-        if let Some(video_idx) = self.thumbnail_queue.pop_front() {
-            if let Some(video) = self.videos.get(video_idx) {
-                let thumb_path = config::cache_dir().join("thumbs").join(format!("thumb_{}.png", video_idx));
-                let _ = std::fs::create_dir_all(thumb_path.parent().unwrap());
-                if ffmpeg::extract_thumbnail(&video.path, &thumb_path).is_ok() {
-                    if let Ok(img_data) = std::fs::read(&thumb_path) {
-                        if let Ok(img) = image::load_from_memory(&img_data) {
+    pub(super) fn poll_thumbnail_results(&mut self, ctx: &egui::Context) {
+        let mut changed = false;
+        if let Some(rx) = self.thumbnail_rx.take() {
+            loop {
+                match rx.try_recv() {
+                    Ok(ThumbnailResult::Loaded { index, bytes }) => {
+                        self.thumbnail_inflight.remove(&index);
+                        self.thumbnail_loaded.insert(index);
+                        if let Ok(img) = image::load_from_memory(&bytes) {
                             let rgba = img.to_rgba8();
                             let size = [rgba.width() as _, rgba.height() as _];
                             let pixels = rgba.into_raw();
                             let color_img = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-                            let texture = ctx.load_texture(format!("thumb_{}", video_idx), egui::ImageData::Color(color_img.into()), egui::TextureOptions::LINEAR);
-                            self.overview_thumbnails.insert(video_idx, texture);
-                            return;
+                            let texture = ctx.load_texture(format!("thumb_{}", index), egui::ImageData::Color(color_img.into()), egui::TextureOptions::LINEAR);
+                            self.overview_thumbnails.insert(index, texture);
+                        } else {
+                            self.thumbnail_errors.insert(index);
                         }
+                        changed = true;
                     }
+                    Ok(ThumbnailResult::Failed { index }) => {
+                        self.thumbnail_inflight.remove(&index);
+                        self.thumbnail_errors.insert(index);
+                        changed = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
                 }
-                self.thumbnail_errors.insert(video_idx);
             }
+            self.thumbnail_rx = Some(rx);
         }
+        if changed { ctx.request_repaint(); }
+    }
+
+    pub(super) fn process_thumbnail_queue(&mut self, ctx: &egui::Context) {
+        let max_new_jobs = 2usize.saturating_sub(self.thumbnail_inflight.len().min(2));
+        for _ in 0..max_new_jobs {
+            let Some(video_idx) = self.thumbnail_queue.pop_front() else { break; };
+            let Some(video) = self.videos.get(video_idx).cloned() else { continue; };
+            let tx = self.thumbnail_tx.clone();
+            let thumb_path = config::cache_dir().join("thumbs").join(format!("thumb_{}.png", video_idx));
+            std::thread::spawn(move || {
+                let result = (|| -> Result<Vec<u8>, String> {
+                    if let Some(parent) = thumb_path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+                    ffmpeg::extract_thumbnail(&video.path, &thumb_path)?;
+                    std::fs::read(&thumb_path).map_err(|e| e.to_string())
+                })();
+                let _ = match result {
+                    Ok(bytes) => tx.send(ThumbnailResult::Loaded { index: video_idx, bytes }),
+                    Err(_) => tx.send(ThumbnailResult::Failed { index: video_idx }),
+                };
+            });
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 
     pub(super) fn render_sorting(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -380,27 +403,24 @@ impl VideoTaggerApp {
         ui.heading("视频列表");
         ui.label(RichText::new("点击回看并修改").small().color(Color32::from_gray(150)));
         ui.separator();
-        let item_height = 66.0;
         let mut clicked: Option<usize> = None;
-        egui::ScrollArea::vertical().id_salt("video_list_scroll").show_rows(ui, item_height, self.videos.len(), |ui, range| {
-            for i in range {
+        egui::ScrollArea::vertical().id_salt("video_list_scroll").show(ui, |ui| {
+            for i in 0..self.videos.len() {
                 let is_current = i == self.current_video_index;
                 let processed = self.is_processed(i);
                 let name = self.videos[i].filename.clone();
                 let fill = if is_current { Color32::from_rgb(60, 100, 180) } else if processed { Color32::from_rgb(35, 70, 35) } else { Color32::from_gray(32) };
                 egui::Frame::NONE.fill(fill).inner_margin(4.0).show(ui, |ui| {
-                    let response = ui.horizontal(|ui| {
-                        let (rect, image_resp) = ui.allocate_exact_size(Vec2::new(62.0, 36.0), egui::Sense::click());
+                    let response = ui.vertical(|ui| {
+                        let (rect, image_resp) = ui.allocate_exact_size(Vec2::new(120.0, 68.0), egui::Sense::click());
                         self.paint_thumbnail(ui, rect, i, "...");
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(format!("{}{}", if is_current { "▶ " } else { "" }, i + 1)).strong());
-                            ui.label(RichText::new(name).small());
-                        });
+                        ui.label(RichText::new(format!("{}{}", if is_current { "▶ " } else { "" }, i + 1)).strong());
+                        ui.label(RichText::new(name).small());
                         image_resp
                     }).response;
                     if response.clicked() { clicked = Some(i); }
                 });
-                ui.add_space(3.0);
+                ui.add_space(6.0);
             }
         });
         if let Some(i) = clicked { self.begin_edit_video(i, false); }
