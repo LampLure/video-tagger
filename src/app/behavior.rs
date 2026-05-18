@@ -75,6 +75,36 @@ impl VideoTaggerApp {
         self.selected_screenshot_index = self.selected_screenshot_index.min(9);
     }
 
+    pub(super) fn select_category(&mut self, category_index: usize) {
+        self.active_category_index = category_index.min(self.category_count_with_star().saturating_sub(1));
+        if self.is_star_category() {
+            self.selected_tag_index = if self.is_starred { 1 } else { 0 };
+        } else {
+            self.selected_tag_index = 0;
+            if let Some(existing) = self.current_labels.get(self.active_category_index) {
+                let tags = self.current_category_tags();
+                if let Some(pos) = tags.iter().position(|tag| tag == existing) {
+                    self.selected_tag_index = pos;
+                }
+            }
+        }
+        self.clamp_category_cursor();
+    }
+
+    fn set_current_category_label(&mut self, label: String) {
+        if self.is_star_category() { return; }
+        let idx = self.active_category_index;
+        if self.current_labels.iter().enumerate().any(|(i, existing)| i != idx && existing == &label) {
+            return;
+        }
+        if idx < self.current_labels.len() {
+            self.current_labels[idx] = label;
+        } else {
+            self.current_labels.push(label);
+        }
+        self.undone_labels.clear();
+    }
+
     pub(super) fn reset_edit_state(&mut self) {
         self.current_labels.clear();
         self.undone_labels.clear();
@@ -103,9 +133,7 @@ impl VideoTaggerApp {
                 self.is_starred = parsed.starred;
             }
         }
-        self.active_category_index = self.current_labels.len().min(self.tag_library.category_count());
-        self.selected_tag_index = 0;
-        self.clamp_category_cursor();
+        self.select_category(self.current_labels.len().min(self.tag_library.category_count()));
     }
 
     pub(super) fn begin_edit_video(&mut self, index: usize, independent: bool) {
@@ -277,9 +305,7 @@ impl VideoTaggerApp {
     }
 
     pub(super) fn add_label(&mut self, label: String) {
-        if self.current_labels.iter().any(|existing| existing == &label) { return; }
-        self.current_labels.push(label);
-        self.undone_labels.clear();
+        self.set_current_category_label(label);
     }
 
     pub(super) fn undo_label(&mut self) {
@@ -290,14 +316,13 @@ impl VideoTaggerApp {
         }
         if let Some(label) = self.current_labels.pop() {
             self.undone_labels.push(label);
-            self.active_category_index = self.current_labels.len().min(self.tag_library.category_count());
-            self.selected_tag_index = 0;
+            self.select_category(self.current_labels.len().min(self.tag_library.category_count()));
         }
     }
 
     pub(super) fn redo_label(&mut self) {
         if let Some(label) = self.undone_labels.pop() {
-            if !self.current_labels.iter().any(|existing| existing == &label) { self.current_labels.push(label); }
+            self.set_current_category_label(label);
         }
     }
 
@@ -330,11 +355,9 @@ impl VideoTaggerApp {
 
         let tags = self.current_category_tags();
         if let Some(label) = tags.get(self.selected_tag_index).cloned() {
-            self.add_label(label);
+            self.set_current_category_label(label);
         }
-        self.active_category_index = (self.active_category_index + 1).min(self.tag_library.category_count());
-        self.selected_tag_index = 0;
-        self.clamp_category_cursor();
+        self.select_category((self.active_category_index + 1).min(self.tag_library.category_count()));
     }
 
     pub(super) fn play_selected_screenshot_audio(&mut self) {
@@ -345,14 +368,34 @@ impl VideoTaggerApp {
         self.playing_screenshot = Some(idx);
     }
 
+    pub(super) fn skip_current_video(&mut self) {
+        if self.videos.is_empty() { return; }
+        let independent = self.independent_edit.is_some();
+        let next_idx = self.current_video_index + 1;
+        if independent {
+            self.reset_edit_state();
+            self.independent_edit = None;
+            self.app_mode = AppMode::Overview;
+            return;
+        }
+        if next_idx >= self.videos.len() {
+            self.reset_edit_state();
+            self.app_mode = AppMode::Overview;
+            self.show_completion = true;
+            return;
+        }
+        self.begin_edit_video(next_idx, false);
+    }
+
     pub(super) fn finalize_current_video(&mut self) {
         if self.videos.is_empty() { return; }
         let video = self.videos[self.current_video_index].clone();
-        let should_rename = !self.current_labels.is_empty() || self.is_starred;
+        let labels: Vec<String> = self.current_labels.iter().filter(|label| !label.trim().is_empty()).cloned().collect();
+        let should_rename = !labels.is_empty() || self.is_starred;
 
         if let Some(ref prog) = self.folder_progress {
             let overwrite = self.config.shift_lock || self.pending_overwrite_once;
-            let new_name = config::format_video_name(&prog.identifier, self.current_video_index, prog.digit_count, &self.current_labels, self.is_starred, &video.filename, &video.extension, overwrite);
+            let new_name = config::format_video_name(&prog.identifier, self.current_video_index, prog.digit_count, &labels, self.is_starred, &video.filename, &video.extension, overwrite);
             let parent = video.path.parent().unwrap_or(std::path::Path::new("."));
             let mut final_path = parent.join(&new_name);
 
@@ -370,8 +413,8 @@ impl VideoTaggerApp {
                     self.thumbnail_inflight.remove(&self.current_video_index);
                 }
             }
-            if !self.current_labels.is_empty() {
-                self.tag_library.record_usage(&self.current_labels);
+            if !labels.is_empty() {
+                self.tag_library.record_usage(&labels);
                 self.tag_library.save();
             }
         }
@@ -417,6 +460,8 @@ impl VideoTaggerApp {
         if input.key_pressed(egui::Key::X) { self.play_selected_screenshot_audio(); }
 
         if input.key_pressed(egui::Key::Delete) { self.undo_label(); }
+        if input.key_pressed(egui::Key::ArrowUp) { self.select_category(self.active_category_index.saturating_sub(1)); }
+        if input.key_pressed(egui::Key::ArrowDown) { self.select_category((self.active_category_index + 1).min(self.category_count_with_star().saturating_sub(1))); }
         if input.key_pressed(egui::Key::ArrowLeft) { self.selected_tag_index = self.selected_tag_index.saturating_sub(1); }
         if input.key_pressed(egui::Key::ArrowRight) {
             let max = self.current_category_tags().len().saturating_sub(1);
