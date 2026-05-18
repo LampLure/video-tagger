@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoFile {
     pub path: PathBuf,
@@ -31,6 +35,10 @@ pub struct FolderProgress {
 pub struct AppConfig {
     pub screenshot_interval: f64,
     pub shift_lock: bool,
+    #[serde(default)]
+    pub tag_position_lock: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
     pub last_folder: Option<PathBuf>,
     pub tag_library: Vec<TagDef>,
 }
@@ -56,8 +64,36 @@ impl Default for AppConfig {
         Self {
             screenshot_interval: 10.0,
             shift_lock: false,
+            tag_position_lock: false,
+            ui_scale: 1.0,
             last_folder: None,
             tag_library: Vec::new(),
+        }
+    }
+}
+
+impl AppConfig {
+    pub fn load() -> Self {
+        let path = config_path();
+        let mut config = if path.exists() {
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else {
+            Self::default()
+        };
+        config.ui_scale = config.ui_scale.clamp(0.5, 3.0);
+        config
+    }
+
+    pub fn save(&self) {
+        let path = config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path, json);
         }
     }
 }
@@ -138,16 +174,24 @@ pub fn parse_video_name(stem: &str) -> Option<ParsedVideoName> {
     }
     rest = rest.get(id_end + 1..)?;
 
-    if !rest.starts_with('[') {
-        return None;
+    let num_str;
+    if rest.starts_with('[') {
+        let num_end = rest.find(']')?;
+        num_str = rest.get(1..num_end)?.to_string();
+        rest = rest.get(num_end + 1..)?;
+    } else {
+        let digit_len = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digit_len == 0 {
+            return None;
+        }
+        num_str = rest.get(..digit_len)?.to_string();
+        rest = rest.get(digit_len..)?;
     }
-    let num_end = rest.find(']')?;
-    let num_str = rest.get(1..num_end)?;
+
     if num_str.is_empty() || !num_str.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let index = num_str.parse::<usize>().ok()?;
-    rest = rest.get(num_end + 1..)?;
 
     let mut starred = false;
     let mut labels = Vec::new();

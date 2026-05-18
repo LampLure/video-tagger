@@ -7,13 +7,13 @@ pub struct ScreenshotCache {
     base_dir: PathBuf,
     max_size_mb: u64,
     current_size: u64,
-    lru_order: VecDeque<String>, // video hash, most recently used at back
+    lru_order: VecDeque<String>,
     video_cache: HashMap<String, VideoCacheEntry>,
 }
 
 #[derive(Debug)]
 struct VideoCacheEntry {
-    screenshot_paths: HashMap<String, Vec<PathBuf>>, // range_start -> [paths]
+    screenshot_paths: HashMap<String, Vec<PathBuf>>,
     total_size: u64,
 }
 
@@ -43,6 +43,19 @@ impl ScreenshotCache {
         self.base_dir.join(hash)
     }
 
+    fn effective_interval(start_sec: f64, requested_interval: f64, count: usize, video_duration: f64) -> f64 {
+        let count = count.max(1) as f64;
+        if video_duration <= 0.0 {
+            return requested_interval.max(0.1);
+        }
+        let remaining = (video_duration - start_sec).max(0.0);
+        if video_duration < requested_interval * count || remaining < requested_interval * count {
+            (remaining / count).max(0.1)
+        } else {
+            requested_interval.max(0.1)
+        }
+    }
+
     pub fn get_or_extract_screenshots(
         &mut self,
         video_path: &Path,
@@ -52,28 +65,18 @@ impl ScreenshotCache {
         video_duration: f64,
     ) -> Vec<PathBuf> {
         let hash = Self::video_hash(video_path);
-        let range_key = format!("{}", (start_sec * 10.0) as u64);
+        let effective_interval = Self::effective_interval(start_sec, interval, count, video_duration);
+        let range_key = format!("{}_{}", (start_sec * 10.0) as u64, (effective_interval * 1000.0) as u64);
 
-        // Check cache
-        let cached_paths: Option<Vec<PathBuf>> = {
-            if let Some(entry) = self.video_cache.get(&hash) {
-                entry.screenshot_paths.get(&range_key).cloned()
-            } else {
-                None
-            }
-        };
+        let cached_paths = self
+            .video_cache
+            .get(&hash)
+            .and_then(|entry| entry.screenshot_paths.get(&range_key).cloned());
 
         if let Some(paths) = cached_paths {
             self.touch_lru(&hash);
             return paths;
         }
-
-        // Extract via ffmpeg
-        let effective_interval = if start_sec + (count as f64) * interval > video_duration {
-            video_duration / count as f64
-        } else {
-            interval
-        };
 
         let dir = self.video_dir(&hash);
         let paths = crate::ffmpeg::extract_screenshots(
@@ -86,28 +89,21 @@ impl ScreenshotCache {
         )
         .unwrap_or_default();
 
-        // Compute size
-        let mut total_size: u64 = 0;
-        for p in &paths {
-            if let Ok(meta) = std::fs::metadata(p) {
-                total_size += meta.len();
-            }
-        }
-
-        // Store in cache
         let entry = self.video_cache.entry(hash.clone()).or_insert(VideoCacheEntry {
             screenshot_paths: HashMap::new(),
             total_size: 0,
         });
 
-        let old_size = entry.total_size;
         entry.screenshot_paths.insert(range_key, paths.clone());
-        entry.total_size = total_size;
-        self.current_size = self.current_size.saturating_sub(old_size);
-        self.current_size += total_size;
-        self.touch_lru(&hash);
+        entry.total_size = entry
+            .screenshot_paths
+            .values()
+            .flat_map(|paths| paths.iter())
+            .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
+            .sum();
 
-        // Evict if over limit
+        self.current_size = self.video_cache.values().map(|entry| entry.total_size).sum();
+        self.touch_lru(&hash);
         self.evict_excess();
 
         paths
@@ -124,19 +120,10 @@ impl ScreenshotCache {
             if let Some(hash) = self.lru_order.pop_front() {
                 if let Some(entry) = self.video_cache.remove(&hash) {
                     self.current_size = self.current_size.saturating_sub(entry.total_size);
-                    // Delete cache files
                     let dir = self.video_dir(&hash);
                     let _ = std::fs::remove_dir_all(&dir);
                 }
             }
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.video_cache.clear();
-        self.lru_order.clear();
-        self.current_size = 0;
-        let _ = std::fs::remove_dir_all(&self.base_dir);
-        let _ = std::fs::create_dir_all(&self.base_dir);
     }
 }
