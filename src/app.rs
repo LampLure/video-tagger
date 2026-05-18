@@ -1,10 +1,13 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::process::Child;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use eframe::egui;
 use egui::{Color32, RichText, StrokeKind, Vec2};
 
+use crate::ai::{self, AiAnalysisResult, AiEvent, AiFailureRecord, AiRuntimeConfig, AiServiceProps, AiVideoJob};
 use crate::audio::AudioPlayer;
 use crate::cache::ScreenshotCache;
 use crate::config::{self, AppConfig, VideoFile};
@@ -14,6 +17,7 @@ use crate::scanner;
 use crate::tags::{TagLibrary, MAX_TAG_CATEGORIES, MAX_TAGS_PER_CATEGORY, STAR_CATEGORY_NAME};
 
 mod behavior;
+mod ai_behavior;
 mod ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +32,21 @@ pub enum SortMode {
     Name,
     Date,
     Size,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiServiceState {
+    Disconnected,
+    Starting,
+    ConnectedOwned,
+    ConnectedExternal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiBatchState {
+    Idle,
+    Running,
+    AwaitingConfirmation,
 }
 
 pub enum ThumbnailResult {
@@ -77,6 +96,7 @@ pub struct VideoTaggerApp {
     selected_screenshot_index: usize,
 
     current_labels: Vec<String>,
+    current_score: Option<u8>,
     undone_labels: Vec<String>,
     is_starred: bool,
     pending_overwrite_once: bool,
@@ -99,14 +119,33 @@ pub struct VideoTaggerApp {
     ffmpeg_dialog_open: bool,
     ui_scale_percent_input: String,
     video_list_follow_index: Option<usize>,
+
+    ai_mode: bool,
+    ai_scripts: Vec<PathBuf>,
+    ai_selected_script: usize,
+    ai_service_state: AiServiceState,
+    ai_model_process: Option<Child>,
+    ai_service_props: Option<AiServiceProps>,
+    ai_batch_state: AiBatchState,
+    ai_log: Vec<String>,
+    ai_failures: Vec<AiFailureRecord>,
+    ai_success_count: usize,
+    ai_pending_result: Option<AiAnalysisResult>,
+    ai_notice: Option<String>,
+    ai_confirm_cancel: bool,
+    ai_work_id: u64,
+    ai_rx: Option<mpsc::Receiver<AiEvent>>,
+    ai_tx: mpsc::Sender<AiEvent>,
 }
 
 impl Default for VideoTaggerApp {
     fn default() -> Self {
         let (thumbnail_tx, thumbnail_rx) = mpsc::channel();
         let (screenshot_tx, screenshot_rx) = mpsc::channel();
+        let (ai_tx, ai_rx) = mpsc::channel();
         let config = AppConfig::load();
         let ui_scale_percent_input = format!("{}", (config.ui_scale.clamp(0.5, 3.0) * 100.0).round() as i32);
+        let ai_scripts = ai::list_model_scripts();
         Self {
             app_mode: AppMode::Fresh,
             config,
@@ -142,6 +181,7 @@ impl Default for VideoTaggerApp {
             selected_screenshot_index: 0,
 
             current_labels: Vec::new(),
+            current_score: None,
             undone_labels: Vec::new(),
             is_starred: false,
             pending_overwrite_once: false,
@@ -164,6 +204,31 @@ impl Default for VideoTaggerApp {
             ffmpeg_dialog_open: false,
             ui_scale_percent_input,
             video_list_follow_index: None,
+
+            ai_mode: false,
+            ai_scripts,
+            ai_selected_script: 0,
+            ai_service_state: AiServiceState::Disconnected,
+            ai_model_process: None,
+            ai_service_props: None,
+            ai_batch_state: AiBatchState::Idle,
+            ai_log: Vec::new(),
+            ai_failures: Vec::new(),
+            ai_success_count: 0,
+            ai_pending_result: None,
+            ai_notice: None,
+            ai_confirm_cancel: false,
+            ai_work_id: 0,
+            ai_rx: Some(ai_rx),
+            ai_tx,
+        }
+    }
+}
+
+impl Drop for VideoTaggerApp {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.ai_model_process.take() {
+            ai::stop_process_tree(&mut child);
         }
     }
 }
@@ -190,12 +255,13 @@ impl eframe::App for VideoTaggerApp {
 
         self.poll_thumbnail_results(ctx);
         self.poll_screenshot_results(ctx);
+        self.poll_ai_events(ctx);
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| self.render_top_bar(ui));
 
         egui::TopBottomPanel::top("ui_scale_bar").show(ctx, |ui| {
             egui::Frame::none()
-                .fill(Color32::from_gray(18))
+                .fill(if self.ai_mode { Color32::from_rgb(18, 28, 42) } else { Color32::from_gray(18) })
                 .inner_margin(egui::Margin::symmetric(16, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -226,7 +292,12 @@ impl eframe::App for VideoTaggerApp {
                             ctx.set_pixels_per_point(1.0);
                         }
                         ui.separator();
-                        ui.label(RichText::new("Space 确认标签 / Q-E 翻页 / WASD 选图 / X 播放音频").small().color(Color32::from_gray(130)));
+                        let help = if self.ai_mode {
+                            "AI 模式：启动模型后点击 AI 分析；等待确认时 Space 接受 / Delete 重生"
+                        } else {
+                            "Space 确认标签 / Q-E 翻页 / WASD 选图 / X 播放音频"
+                        };
+                        ui.label(RichText::new(help).small().color(Color32::from_gray(130)));
                     });
                 });
         });
@@ -234,11 +305,11 @@ impl eframe::App for VideoTaggerApp {
         egui::SidePanel::left("sidebar")
             .resizable(false)
             .min_width(210.0)
-            .max_width(260.0)
+            .max_width(if self.ai_mode { 320.0 } else { 260.0 })
             .show(ctx, |ui| self.render_sidebar(ui));
 
         let central_frame = if self.app_mode == AppMode::Sorting {
-            egui::Frame::none().fill(Color32::from_gray(24))
+            egui::Frame::none().fill(if self.ai_mode { Color32::from_rgb(20, 27, 38) } else { Color32::from_gray(24) })
         } else {
             egui::Frame::central_panel(&ctx.style())
         };
@@ -269,10 +340,14 @@ impl eframe::App for VideoTaggerApp {
 
         self.render_ffmpeg_dialog(ctx);
         self.render_completion_dialog(ctx);
+        self.render_ai_notice(ctx);
+        self.render_ai_cancel_dialog(ctx);
         self.process_thumbnail_queue(ctx);
 
         if self.app_mode == AppMode::Sorting {
-            self.handle_keyboard_input(ctx);
+            if !self.handle_ai_keyboard_input(ctx) {
+                self.handle_keyboard_input(ctx);
+            }
         }
     }
 }
