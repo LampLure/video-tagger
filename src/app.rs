@@ -252,11 +252,16 @@ impl eframe::App for VideoTaggerApp {
                 let total = self.videos.len();
                 let done = self.processed_count();
                 let frac = done as f32 / total as f32;
-                ui.add(
-                    egui::ProgressBar::new(frac)
-                        .desired_width(ui.available_width())
-                        .text(format!("已完成 {}/{} | 当前第 {} 个", done, total, self.current_video_index + 1)),
-                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_width((ui.available_width() - 120.0).max(120.0))
+                            .text(format!("已完成 {}/{} | 当前第 {} 个", done, total, self.current_video_index + 1)),
+                    );
+                    if ui.button("跳过当前视频").clicked() {
+                        self.skip_current_video();
+                    }
+                });
             });
         }
 
