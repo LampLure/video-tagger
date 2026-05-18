@@ -195,7 +195,9 @@ impl VideoTaggerApp {
     pub(super) fn enter_sorting(&mut self) {
         if self.videos.is_empty() { return; }
         let start_idx = self.folder_progress.as_ref().map(|p| p.last_processed).unwrap_or(0);
-        self.begin_edit_video(start_idx.min(self.videos.len().saturating_sub(1)), false);
+        let index = start_idx.min(self.videos.len().saturating_sub(1));
+        self.begin_edit_video(index, false);
+        self.video_list_follow_index = Some(index);
     }
 
     pub(super) fn exit_sorting(&mut self) {
@@ -204,6 +206,7 @@ impl VideoTaggerApp {
         }
         self.reset_edit_state();
         self.independent_edit = None;
+        self.video_list_follow_index = None;
         self.app_mode = AppMode::Overview;
     }
 
@@ -402,16 +405,19 @@ impl VideoTaggerApp {
         if independent {
             self.reset_edit_state();
             self.independent_edit = None;
+            self.video_list_follow_index = None;
             self.app_mode = AppMode::Overview;
             return;
         }
         if next_idx >= self.videos.len() {
             self.reset_edit_state();
+            self.video_list_follow_index = None;
             self.app_mode = AppMode::Overview;
             self.show_completion = true;
             return;
         }
         self.begin_edit_video(next_idx, false);
+        self.video_list_follow_index = Some(next_idx);
     }
 
     fn apply_current_video_changes(&mut self) {
@@ -461,16 +467,19 @@ impl VideoTaggerApp {
         if independent {
             self.reset_edit_state();
             self.independent_edit = None;
+            self.video_list_follow_index = None;
             self.app_mode = AppMode::Overview;
             return;
         }
         if next_idx >= self.videos.len() {
             self.reset_edit_state();
+            self.video_list_follow_index = None;
             self.app_mode = AppMode::Overview;
             self.show_completion = true;
             return;
         }
         self.begin_edit_video(next_idx, false);
+        self.video_list_follow_index = Some(next_idx);
     }
 
     pub(super) fn handle_keyboard_input(&mut self, ctx: &egui::Context) {
