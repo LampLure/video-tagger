@@ -25,7 +25,11 @@ impl AudioPlayer {
         self.stop();
 
         let video_path = video_path.to_path_buf();
-        let output_path = crate::config::cache_dir().join("audio_clip.wav");
+        let output_path = crate::config::cache_dir().join("audio").join(format!(
+            "audio_clip_{}_{}.wav",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
         let clip_path = output_path.clone();
         let (tx, rx) = mpsc::channel();
 
@@ -68,12 +72,12 @@ impl AudioPlayer {
                             }
                         }
                     }
+                    let _ = fs::remove_file(&clip);
                     flag.store(false, Ordering::SeqCst);
                 });
             }
         }
 
-        // Check if playback finished
         if let Some(ref flag) = self.playing_flag {
             if !flag.load(Ordering::SeqCst) {
                 self.is_playing = false;
