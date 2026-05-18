@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{self, FolderProgress, VideoFile};
 
@@ -11,6 +11,36 @@ pub fn load_progress(folder: &PathBuf) -> Option<FolderProgress> {
     } else {
         None
     }
+}
+
+fn load_progress_from_ancestor(start: &Path) -> Option<(PathBuf, FolderProgress)> {
+    let mut dir = if start.is_file() {
+        start.parent()?.to_path_buf()
+    } else {
+        start.to_path_buf()
+    };
+
+    loop {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                if path.is_file() && name.ends_with("_video_tagger_progress.json") {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        if let Ok(progress) = serde_json::from_str::<FolderProgress>(&text) {
+                            return Some((dir.clone(), progress));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    None
 }
 
 pub fn save_progress(folder: &PathBuf, progress: &FolderProgress) {
@@ -72,12 +102,26 @@ pub fn init_progress_for_folder(folder: &PathBuf, videos: &[VideoFile]) -> Folde
 
 pub fn init_progress(videos: &[VideoFile], identifier: &str) -> FolderProgress {
     let digit_count = config::compute_digit_count(videos.len());
-    let last_processed = detect_progress_from_filenames(videos, identifier)
+
+    if let Some(first) = videos.first() {
+        if let Some((_, mut progress)) = load_progress_from_ancestor(&first.path) {
+            progress.digit_count = progress.digit_count.max(digit_count);
+            progress.video_count = videos.len();
+            if let Some((last_processed, _)) = detect_progress_from_filenames(videos, &progress.identifier) {
+                progress.last_processed = progress.last_processed.max(last_processed);
+            }
+            return progress;
+        }
+    }
+
+    let resolved_identifier = detect_identifier_from_filenames(videos)
+        .unwrap_or_else(|| identifier.to_string());
+    let last_processed = detect_progress_from_filenames(videos, &resolved_identifier)
         .map(|(idx, _)| idx)
         .unwrap_or(0);
 
     FolderProgress {
-        identifier: identifier.into(),
+        identifier: resolved_identifier,
         digit_count,
         last_processed,
         video_count: videos.len(),
