@@ -1,8 +1,7 @@
 use super::*;
 use egui::{Color32, Margin, Rounding, Stroke};
 
-// --- 统一的 UI 样式定义 ---
-fn panel_frame(style: &egui::Style) -> egui::Frame {
+fn panel_frame(_style: &egui::Style) -> egui::Frame {
     egui::Frame::none()
         .fill(Color32::from_rgb(32, 34, 38))
         .rounding(Rounding::same(8.0))
@@ -10,15 +9,15 @@ fn panel_frame(style: &egui::Style) -> egui::Frame {
         .inner_margin(Margin::same(10.0))
 }
 
-fn card_frame(style: &egui::Style, is_active: bool, is_processed: bool) -> egui::Frame {
+fn card_frame(_style: &egui::Style, is_active: bool, is_processed: bool) -> egui::Frame {
     let bg_color = if is_active {
-        Color32::from_rgb(45, 60, 90) // 激活状态：深蓝
+        Color32::from_rgb(45, 60, 90)
     } else if is_processed {
-        Color32::from_rgb(35, 48, 40) // 已处理状态：深绿
+        Color32::from_rgb(35, 48, 40)
     } else {
-        Color32::from_rgb(26, 28, 31) // 默认状态：深灰
+        Color32::from_rgb(26, 28, 31)
     };
-    
+
     let stroke_color = if is_active {
         Color32::from_rgb(90, 125, 215)
     } else {
@@ -39,18 +38,18 @@ impl VideoTaggerApp {
             .inner_margin(Margin::symmetric(16.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🎬 Video Tagger").size(18.0).strong());
+                    ui.label(RichText::new("Video Tagger").size(18.0).strong());
                     ui.add_space(16.0);
-                    
+
                     let mode_text = match self.app_mode {
-                        AppMode::Fresh => "📍 选择文件夹",
-                        AppMode::Overview => "📊 总览模式",
-                        AppMode::Sorting => "🏷️ 分拣模式",
+                        AppMode::Fresh => "选择文件夹",
+                        AppMode::Overview => "总览模式",
+                        AppMode::Sorting => "分拣模式",
                     };
                     ui.label(RichText::new(mode_text).color(Color32::from_gray(180)));
-                    
+
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new("⚙ FFmpeg").rounding(4.0)).clicked() {
+                        if ui.add(egui::Button::new("FFmpeg").rounding(4.0)).clicked() {
                             self.ffmpeg_dialog_open = true;
                         }
                         if let Some(ref path) = self.ffmpeg_path {
@@ -68,9 +67,8 @@ impl VideoTaggerApp {
         });
         ui.add_space(12.0);
 
-        // 操作区
         panel_frame(ui.style()).show(ui, |ui| {
-            if ui.add_sized([ui.available_width(), 36.0], egui::Button::new("📂 重新选择文件夹").rounding(6.0)).clicked() {
+            if ui.add_sized([ui.available_width(), 36.0], egui::Button::new("重新选择文件夹").rounding(6.0)).clicked() {
                 self.pick_folder();
             }
 
@@ -82,17 +80,17 @@ impl VideoTaggerApp {
 
             ui.add_space(16.0);
             let btn_text = match self.app_mode {
-                AppMode::Fresh => if self.selected_folder.is_some() { "▶ 开始总览" } else { "请先选择文件夹" },
-                AppMode::Overview => "⚡ 进入分拣",
-                AppMode::Sorting => "⬅ 返回总览",
+                AppMode::Fresh => if self.selected_folder.is_some() { "开始总览" } else { "请先选择文件夹" },
+                AppMode::Overview => "进入分拣",
+                AppMode::Sorting => "返回总览",
             };
-            
+
             let enabled = self.ffmpeg_path.is_some() && !(self.app_mode == AppMode::Fresh && self.selected_folder.is_none());
             let primary_btn = egui::Button::new(RichText::new(btn_text).strong())
                 .min_size(Vec2::new(ui.available_width(), 36.0))
                 .fill(if enabled { Color32::from_rgb(70, 100, 180) } else { Color32::from_gray(50) })
                 .rounding(6.0);
-                
+
             if ui.add_enabled(enabled, primary_btn).clicked() {
                 match self.app_mode {
                     AppMode::Fresh => self.enter_overview(),
@@ -104,7 +102,6 @@ impl VideoTaggerApp {
 
         ui.add_space(12.0);
 
-        // 设置区
         panel_frame(ui.style()).show(ui, |ui| {
             ui.label(RichText::new("截图设置").strong());
             ui.add_space(6.0);
@@ -117,7 +114,6 @@ impl VideoTaggerApp {
             ui.label(RichText::new("Shift+Enter 临时覆盖一次").small().color(Color32::from_gray(120)));
         });
 
-        // 进度与状态区
         if let Some(ref prog) = self.folder_progress {
             ui.add_space(12.0);
             panel_frame(ui.style()).show(ui, |ui| {
@@ -141,17 +137,17 @@ impl VideoTaggerApp {
                     ui.label(RichText::new("当前处理信息").strong());
                     ui.add_space(6.0);
                     ui.label(RichText::new(&video.filename).size(13.0).italics());
-                    
+
                     ui.add_space(6.0);
                     let dur = video.duration_secs.unwrap_or(0.0);
-                    if dur > 0.0 { 
-                        ui.label(RichText::new(format!("时长: {:.1}s", dur)).small().color(Color32::from_gray(170))); 
+                    if dur > 0.0 {
+                        ui.label(RichText::new(format!("时长: {:.1}s", dur)).small().color(Color32::from_gray(170)));
                     }
                     let end = self.screenshot_start_sec + self.current_effective_interval() * 9.0;
                     ui.label(RichText::new(format!("区间: {:.1}s - {:.1}s", self.screenshot_start_sec, end)).small().color(Color32::from_gray(170)));
-                    
+
                     ui.add_space(8.0);
-                    ui.label(RichText::new("⌨ R 后移 / Shift+R 回退").small().color(Color32::from_gray(100)));
+                    ui.label(RichText::new("R 后移 / Shift+R 回退").small().color(Color32::from_gray(100)));
                 }
             });
         }
@@ -160,8 +156,6 @@ impl VideoTaggerApp {
     pub(super) fn render_welcome(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.3);
-            ui.label(RichText::new("🏷️").size(64.0));
-            ui.add_space(16.0);
             ui.heading(RichText::new("Video Tagger").size(32.0).strong());
             ui.add_space(12.0);
             ui.label(RichText::new("请在左侧面板选择包含视频的文件夹以开始").color(Color32::from_gray(150)).size(16.0));
@@ -178,26 +172,26 @@ impl VideoTaggerApp {
 
         panel_frame(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🔍 搜索").strong());
+                ui.label(RichText::new("搜索").strong());
                 ui.add_sized([300.0, 28.0], egui::TextEdit::singleline(&mut self.overview_search).hint_text("输入文件名进行过滤...").margin(Margin::same(6.0)));
-                
-                if ui.button("🗑 清空").clicked() { self.overview_search.clear(); }
-                
+
+                if ui.button("清空").clicked() { self.overview_search.clear(); }
+
                 ui.add_space(16.0);
                 ui.separator();
                 ui.add_space(16.0);
-                
-                ui.label(RichText::new("↕ 排序").strong());
+
+                ui.label(RichText::new("排序").strong());
                 egui::ComboBox::from_id_salt("sort_mode")
                     .selected_text(match self.overview_sort {
-                        SortMode::Name => "📝 文件名 (A-Z)",
-                        SortMode::Date => "📅 修改时间 (新-旧)",
-                        SortMode::Size => "💾 文件大小 (大-小)",
+                        SortMode::Name => "文件名 (A-Z)",
+                        SortMode::Date => "修改时间 (新-旧)",
+                        SortMode::Size => "文件大小 (大-小)",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.overview_sort, SortMode::Name, "📝 文件名 (A-Z)");
-                        ui.selectable_value(&mut self.overview_sort, SortMode::Date, "📅 修改时间 (新-旧)");
-                        ui.selectable_value(&mut self.overview_sort, SortMode::Size, "💾 文件大小 (大-小)");
+                        ui.selectable_value(&mut self.overview_sort, SortMode::Name, "文件名 (A-Z)");
+                        ui.selectable_value(&mut self.overview_sort, SortMode::Date, "修改时间 (新-旧)");
+                        ui.selectable_value(&mut self.overview_sort, SortMode::Size, "文件大小 (大-小)");
                     });
             });
         });
@@ -212,7 +206,7 @@ impl VideoTaggerApp {
         let card_w = ((available - spacing * (cols.saturating_sub(1) as f32)) / cols as f32).floor().clamp(180.0, 280.0);
         let thumb_w = (card_w - 16.0).max(160.0);
         let thumb_h = thumb_w * 9.0 / 16.0;
-        let card_h = thumb_h + 65.0; // 增加了卡片高度留给文字呼吸空间
+        let card_h = thumb_h + 65.0;
         let row_h = card_h + spacing;
         let rows = (filtered.len() + cols - 1) / cols;
 
@@ -220,6 +214,14 @@ impl VideoTaggerApp {
             .id_salt("overview_scroll")
             .auto_shrink([false, false])
             .show_rows(ui, row_h, rows, |ui, row_range| {
+                let mut visible_indices = Vec::new();
+                for row in row_range.clone() {
+                    let start = row * cols;
+                    let end = (start + cols).min(filtered.len());
+                    visible_indices.extend_from_slice(&filtered[start..end]);
+                }
+                self.prioritize_overview_thumbnails(&visible_indices);
+
                 for row in row_range {
                     let start = row * cols;
                     let end = (start + cols).min(filtered.len());
@@ -247,22 +249,19 @@ impl VideoTaggerApp {
                 card_size - Vec2::new(16.0, 16.0),
                 egui::Layout::top_down(egui::Align::Center),
                 |ui| {
-                    // 缩略图区域
                     let (rect, response) = ui.allocate_exact_size(thumb_size, egui::Sense::click());
                     self.paint_thumbnail(ui, rect, video_idx, "加载中...");
                     if response.double_clicked() { open_edit = true; }
-                    
+
                     ui.add_space(8.0);
-                    
-                    // 状态与文件名区域
+
                     ui.horizontal(|ui| {
-                        let (status_text, status_color, status_bg) = if processed { 
-                            ("已分拣", Color32::from_rgb(100, 220, 130), Color32::from_rgb(30, 80, 45)) 
-                        } else { 
-                            ("未分拣", Color32::from_gray(180), Color32::from_rgb(60, 60, 65)) 
+                        let (status_text, status_color, status_bg) = if processed {
+                            ("已分拣", Color32::from_rgb(100, 220, 130), Color32::from_rgb(30, 80, 45))
+                        } else {
+                            ("未分拣", Color32::from_gray(180), Color32::from_rgb(60, 60, 65))
                         };
-                        
-                        // 绘制药丸状状态指示器
+
                         egui::Frame::none()
                             .fill(status_bg)
                             .rounding(Rounding::same(12.0))
@@ -271,19 +270,19 @@ impl VideoTaggerApp {
                                 ui.label(RichText::new(status_text).size(10.0).color(status_color).strong());
                             });
                     });
-                    
+
                     ui.add_space(4.0);
                     ui.add_sized([thumb_size.x, 20.0], egui::Label::new(RichText::new(filename).size(13.0)).truncate());
                 },
             );
         });
-        
+
         let response = inner.response.interact(egui::Sense::click());
         if response.double_clicked() { open_edit = true; }
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        
+
         if open_edit { self.begin_edit_video(video_idx, true); }
     }
 
@@ -305,7 +304,7 @@ impl VideoTaggerApp {
         } else if let Some(reason) = self.thumbnail_errors.get(&video_idx) {
             ui.painter().rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(50, 25, 25));
             ui.painter().rect_stroke(rect, Rounding::same(4.0), Stroke::new(1.0, Color32::from_rgb(100, 40, 40)));
-            ui.painter().text(rect.center_top() + egui::vec2(0.0, 20.0), egui::Align2::CENTER_TOP, "⚠️ Error", egui::FontId::proportional(14.0), Color32::LIGHT_RED);
+            ui.painter().text(rect.center_top() + egui::vec2(0.0, 20.0), egui::Align2::CENTER_TOP, "Error", egui::FontId::proportional(14.0), Color32::LIGHT_RED);
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, reason.chars().take(30).collect::<String>(), egui::FontId::proportional(10.0), Color32::from_rgb(230, 170, 170));
         } else {
             ui.painter().rect_filled(rect, Rounding::same(4.0), Color32::from_gray(35));
@@ -346,11 +345,18 @@ impl VideoTaggerApp {
         if let Some(rx) = self.screenshot_rx.take() {
             loop {
                 match rx.try_recv() {
-                    Ok(ScreenshotResult::Loaded { request_id, paths }) if request_id == self.screenshot_request_id => {
+                    Ok(ScreenshotResult::Loaded { request_id, key, paths }) if request_id == self.screenshot_request_id => {
+                        self.screenshot_cached_ranges.insert(key, paths.clone());
                         self.screenshot_loading = false;
                         self.screenshot_error = None;
                         self.screenshot_paths = paths;
                         self.screenshot_textures.clear();
+                        self.prefetch_adjacent_screenshot_ranges();
+                        changed = true;
+                    }
+                    Ok(ScreenshotResult::Prefetched { key, paths }) => {
+                        self.screenshot_prefetching.remove(&key);
+                        self.screenshot_cached_ranges.insert(key, paths);
                         changed = true;
                     }
                     Ok(ScreenshotResult::Failed { request_id, reason }) if request_id == self.screenshot_request_id => {
@@ -410,12 +416,11 @@ impl VideoTaggerApp {
     pub(super) fn render_sorting(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let available = ui.available_size();
         let list_width = 280.0_f32.min((available.x * 0.22).max(220.0));
-        
+
         ui.horizontal(|ui| {
-            // 主操作区 (左侧)
             ui.vertical(|ui| {
                 ui.set_width((available.x - list_width - 16.0).max(640.0));
-                
+
                 ui.add_space(8.0);
                 self.render_sorting_header(ui);
                 ui.add_space(12.0);
@@ -425,10 +430,9 @@ impl VideoTaggerApp {
                 ui.add_space(12.0);
                 self.render_tag_grid(ui);
             });
-            
+
             ui.add_space(8.0);
-            
-            // 视频列表区 (右侧)
+
             egui::Frame::none()
                 .fill(Color32::from_rgb(22, 24, 26))
                 .inner_margin(Margin::same(0.0))
@@ -447,8 +451,8 @@ impl VideoTaggerApp {
                     ui.label(RichText::new(format!("[{}/{}]", self.current_video_index + 1, self.videos.len())).strong().color(Color32::from_rgb(90, 160, 230)).size(16.0));
                     ui.add_space(8.0);
                     ui.label(RichText::new(&video.filename).size(16.0));
-                    
-                    if self.independent_edit.is_some() { 
+
+                    if self.independent_edit.is_some() {
                         ui.add_space(8.0);
                         egui::Frame::none().fill(Color32::from_rgb(100, 80, 20)).rounding(12.0).inner_margin(Margin::symmetric(8.0, 4.0)).show(ui, |ui| {
                             ui.label(RichText::new("独立编辑").color(Color32::YELLOW).small());
@@ -456,24 +460,24 @@ impl VideoTaggerApp {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("⏎ 确认标签 → 任意键切星 → ⏎ 保存").small().color(Color32::from_gray(120)));
+                    ui.label(RichText::new("Enter 确认标签 -> 任意键切星 -> Enter 保存").small().color(Color32::from_gray(120)));
                 });
             });
         });
     }
 
     fn render_screenshot_area(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if self.screenshot_loading {
+        if self.screenshot_loading && self.screenshot_paths.is_empty() {
             panel_frame(ui.style()).show(ui, |ui| {
                 ui.set_min_height(240.0);
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("⏳ 截图生成中...").size(18.0).color(Color32::from_gray(140)));
+                    ui.label(RichText::new("截图生成中...").size(18.0).color(Color32::from_gray(140)));
                 });
             });
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;
         }
-        
+
         if let Some(ref err) = self.screenshot_error {
             egui::Frame::none()
                 .fill(Color32::from_rgb(50, 25, 25))
@@ -482,15 +486,15 @@ impl VideoTaggerApp {
                 .show(ui, |ui| {
                     ui.set_min_height(240.0);
                     ui.centered_and_justified(|ui| {
-                        ui.label(RichText::new(format!("❌ {}", err)).color(Color32::LIGHT_RED).size(16.0));
+                        ui.label(RichText::new(format!("Error: {}", err)).color(Color32::LIGHT_RED).size(16.0));
                     });
                 });
             return;
         }
-        
-        if self.screenshot_paths.is_empty() { 
-            ui.label(RichText::new("等待截图...").color(Color32::from_gray(100))); 
-            return; 
+
+        if self.screenshot_paths.is_empty() {
+            ui.label(RichText::new("等待截图...").color(Color32::from_gray(100)));
+            return;
         }
 
         for (idx, path) in self.screenshot_paths.iter().enumerate() {
@@ -523,28 +527,27 @@ impl VideoTaggerApp {
                         let idx = row * cols + col;
                         let (rect, response) = ui.allocate_exact_size(Vec2::new(cell_w, cell_h), egui::Sense::click());
                         let is_playing = self.playing_screenshot == Some(idx);
-                        
-                        let border_color = if is_playing { 
-                            Color32::from_rgb(100, 200, 100) 
-                        } else if response.hovered() { 
-                            Color32::from_rgb(150, 180, 255) 
-                        } else { 
-                            Color32::TRANSPARENT 
+
+                        let border_color = if is_playing {
+                            Color32::from_rgb(100, 200, 100)
+                        } else if response.hovered() {
+                            Color32::from_rgb(150, 180, 255)
+                        } else {
+                            Color32::TRANSPARENT
                         };
 
                         ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_gray(20));
-                        
+
                         let tex_id = format!("scr_{}_{}_{}", self.current_video_index, (self.screenshot_start_sec * 10.0) as u64, idx);
-                        if let Some(tex) = self.screenshot_textures.get(&tex_id) { 
+                        if let Some(tex) = self.screenshot_textures.get(&tex_id) {
                             let img = egui::Image::new(tex).fit_to_exact_size(rect.size()).rounding(Rounding::same(6.0));
-                            ui.put(rect, img); 
+                            ui.put(rect, img);
                         }
-                        
+
                         if border_color != Color32::TRANSPARENT {
                             ui.painter().rect_stroke(rect, Rounding::same(6.0), Stroke::new(3.0, border_color));
                         }
 
-                        // 时间胶囊指示器
                         let time_sec = self.screenshot_start_sec + idx as f64 * shown_interval;
                         let text_rect = egui::Rect::from_min_size(
                             rect.left_bottom() + egui::vec2(6.0, -22.0),
@@ -552,7 +555,7 @@ impl VideoTaggerApp {
                         );
                         ui.painter().rect_filled(text_rect, Rounding::same(4.0), Color32::from_black_alpha(180));
                         ui.painter().text(text_rect.center(), egui::Align2::CENTER_CENTER, format!("{:.1}s", time_sec), egui::FontId::proportional(11.0), Color32::WHITE);
-                        
+
                         if response.clicked() {
                             self.audio_player.play_clip(&self.videos[self.current_video_index].path, time_sec);
                             self.playing_screenshot = Some(idx);
@@ -562,15 +565,21 @@ impl VideoTaggerApp {
                 });
                 if row == 0 { ui.add_space(gap); }
             }
+
+            if self.screenshot_loading {
+                ui.add_space(6.0);
+                ui.label(RichText::new("正在预载下一组截图...").small().color(Color32::from_gray(150)));
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
         });
     }
 
     fn render_label_preview_bar(&mut self, ui: &mut egui::Ui) {
         panel_frame(ui.style()).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("🏷 待写入标签").strong());
+                ui.label(RichText::new("待写入标签").strong());
                 ui.add_space(8.0);
-                
+
                 let mut remove_active: Option<usize> = None;
                 for (i, label) in self.current_labels.iter().enumerate() {
                     let response = egui::Frame::none()
@@ -578,16 +587,16 @@ impl VideoTaggerApp {
                         .rounding(Rounding::same(12.0))
                         .inner_margin(Margin::symmetric(10.0, 4.0))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| { 
-                                ui.label(RichText::new(label).color(Color32::WHITE)); 
-                                if ui.add(egui::Button::new(RichText::new("✖").size(10.0)).fill(Color32::TRANSPARENT).frame(false)).clicked() { 
-                                    remove_active = Some(i); 
-                                } 
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(label).color(Color32::WHITE));
+                                if ui.add(egui::Button::new(RichText::new("x").size(10.0)).fill(Color32::TRANSPARENT).frame(false)).clicked() {
+                                    remove_active = Some(i);
+                                }
                             });
                         }).response;
                     if response.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
                 }
-                
+
                 let mut remove_undone: Option<usize> = None;
                 for (i, label) in self.undone_labels.iter().enumerate().rev() {
                     egui::Frame::none()
@@ -596,19 +605,19 @@ impl VideoTaggerApp {
                         .rounding(Rounding::same(12.0))
                         .inner_margin(Margin::symmetric(10.0, 4.0))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| { 
-                                ui.label(RichText::new(label).strikethrough().color(Color32::from_gray(140))); 
-                                if ui.add(egui::Button::new(RichText::new("↩").size(10.0)).fill(Color32::TRANSPARENT).frame(false)).clicked() { 
-                                    remove_undone = Some(i); 
-                                } 
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(label).strikethrough().color(Color32::from_gray(140)));
+                                if ui.add(egui::Button::new(RichText::new("redo").size(10.0)).fill(Color32::TRANSPARENT).frame(false)).clicked() {
+                                    remove_undone = Some(i);
+                                }
                             });
                         });
                 }
-                
-                if self.current_labels.is_empty() && self.undone_labels.is_empty() { 
-                    ui.label(RichText::new("暂无标签 (按 Enter 直接进入无星确认)").small().color(Color32::from_gray(120))); 
+
+                if self.current_labels.is_empty() && self.undone_labels.is_empty() {
+                    ui.label(RichText::new("暂无标签 (按 Enter 直接进入无星确认)").small().color(Color32::from_gray(120)));
                 }
-                
+
                 if let Some(i) = remove_active { self.current_labels.remove(i); self.undone_labels.clear(); }
                 if let Some(i) = remove_undone { self.undone_labels.remove(i); }
             });
@@ -619,50 +628,50 @@ impl VideoTaggerApp {
         let tag_names = self.tag_library.sorted_names();
         let cols = 9;
         let rows = 3;
-        
+
         panel_frame(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("🎛 快捷标签板").strong());
+                ui.label(RichText::new("快捷标签板").strong());
                 ui.add_space(8.0);
                 ui.label(RichText::new("方向键移动，数字 1-9 快捷添加 | 右键删除标签").small().color(Color32::from_gray(120)));
             });
             ui.add_space(10.0);
-            
+
             let gap = 8.0;
             let btn_w = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).max(72.0);
-            
+
             for row in 0..rows {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     for col in 0..cols {
                         let idx = row * cols + col;
                         let is_selected = self.tag_row == row && self.tag_col == col;
-                        
+
                         if idx < tag_names.len() {
                             let tag = &tag_names[idx];
                             let already_added = self.current_labels.iter().any(|existing| existing == tag);
-                            
-                            let (bg_fill, text_color, stroke) = if is_selected { 
+
+                            let (bg_fill, text_color, stroke) = if is_selected {
                                 (Color32::from_rgb(60, 90, 160), Color32::WHITE, Stroke::new(1.0, Color32::from_rgb(100, 150, 255)))
-                            } else if already_added { 
+                            } else if already_added {
                                 (Color32::from_rgb(35, 65, 45), Color32::from_rgb(180, 230, 190), Stroke::NONE)
-                            } else { 
+                            } else {
                                 (Color32::from_rgb(45, 48, 52), Color32::from_gray(200), Stroke::NONE)
                             };
-                            
-                            let text = if already_added { format!("{} ✓ {}", col + 1, tag) } else { format!("{}  {}", col + 1, tag) };
-                            
+
+                            let text = if already_added { format!("{}  yes  {}", col + 1, tag) } else { format!("{}  {}", col + 1, tag) };
+
                             let btn = egui::Button::new(RichText::new(text).size(13.0).color(text_color))
                                 .fill(bg_fill)
                                 .stroke(stroke)
                                 .rounding(Rounding::same(6.0))
                                 .min_size(Vec2::new(btn_w, 32.0));
-                                
+
                             let resp = ui.add(btn);
                             if resp.clicked() { self.add_label(tag.clone()); }
                             if resp.secondary_clicked() { self.tag_library.remove_tag(tag); self.tag_library.save(); }
                             if resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
-                            
+
                         } else if idx == tag_names.len() && !self.editing_new_tag {
                             let btn = egui::Button::new(RichText::new("+ 新增").size(13.0).color(Color32::from_gray(150)))
                                 .fill(Color32::from_rgb(30, 32, 35))
@@ -673,7 +682,6 @@ impl VideoTaggerApp {
                         } else if self.editing_new_tag && idx == tag_names.len() {
                             ui.add_sized([btn_w, 32.0], egui::TextEdit::singleline(&mut self.new_tag_text).hint_text("按 Enter 保存").margin(Margin::same(6.0)));
                         } else {
-                            // 空占位符，保持对齐
                             ui.add_sized(Vec2::new(btn_w, 32.0), egui::Label::new(""));
                         }
                     }
@@ -688,13 +696,13 @@ impl VideoTaggerApp {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             ui.vertical(|ui| {
-                ui.heading(RichText::new("📑 视频队列").strong().size(16.0));
+                ui.heading(RichText::new("视频队列").strong().size(16.0));
                 ui.label(RichText::new("点击任意视频可回看修改").small().color(Color32::from_gray(120)));
             });
         });
         ui.add_space(8.0);
         ui.separator();
-        
+
         let mut clicked: Option<usize> = None;
         egui::ScrollArea::vertical().id_salt("video_list_scroll").show(ui, |ui| {
             ui.add_space(8.0);
@@ -702,13 +710,13 @@ impl VideoTaggerApp {
                 let is_current = i == self.current_video_index;
                 let processed = self.is_processed(i);
                 let name = self.videos[i].filename.clone();
-                
-                let fill = if is_current { 
-                    Color32::from_rgb(45, 65, 110) 
-                } else if processed { 
-                    Color32::from_rgb(30, 45, 35) 
-                } else { 
-                    Color32::from_rgb(30, 32, 35) 
+
+                let fill = if is_current {
+                    Color32::from_rgb(45, 65, 110)
+                } else if processed {
+                    Color32::from_rgb(30, 45, 35)
+                } else {
+                    Color32::from_rgb(30, 32, 35)
                 };
 
                 let stroke = if is_current {
@@ -729,14 +737,13 @@ impl VideoTaggerApp {
                                 Vec2::new(ui.available_width() - 16.0, 100.0),
                                 egui::Layout::top_down(egui::Align::Center),
                                 |ui| {
-                                    // 列表缩略图
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(112.0, 63.0), egui::Sense::hover());
                                     self.paint_thumbnail(ui, rect, i, "...");
-                                    
+
                                     ui.add_space(6.0);
-                                    
+
                                     ui.horizontal(|ui| {
-                                        let icon = if is_current { "▶" } else if processed { "✓" } else { " " };
+                                        let icon = if is_current { ">" } else if processed { "done" } else { "" };
                                         let color = if is_current { Color32::from_rgb(120, 180, 255) } else if processed { Color32::from_rgb(100, 200, 120) } else { Color32::from_gray(150) };
                                         ui.label(RichText::new(format!("{} {}", icon, i + 1)).strong().color(color).size(12.0));
                                     });
@@ -744,7 +751,7 @@ impl VideoTaggerApp {
                                 },
                             );
                         });
-                        
+
                     let response = inner.response.interact(egui::Sense::click());
                     if response.clicked() { clicked = Some(i); }
                     if response.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
@@ -758,9 +765,9 @@ impl VideoTaggerApp {
 
     pub(super) fn render_ffmpeg_dialog(&mut self, ctx: &egui::Context) {
         if !self.ffmpeg_dialog_open { return; }
-        
+
         let mut close = false;
-        egui::Window::new("⚙ FFmpeg 环境配置")
+        egui::Window::new("FFmpeg 环境配置")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -769,24 +776,24 @@ impl VideoTaggerApp {
                 ui.add_space(8.0);
                 if let Some(ref path) = self.ffmpeg_path {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("✅ 已找到 FFmpeg:").color(Color32::LIGHT_GREEN));
+                        ui.label(RichText::new("已找到 FFmpeg:").color(Color32::LIGHT_GREEN));
                         ui.label(RichText::new(path.display().to_string()).monospace());
                     });
                     ui.add_space(8.0);
-                    if ui.button("↻ 重新扫描环境变量").clicked() { self.ffmpeg_path = ffmpeg::find_ffmpeg(); }
+                    if ui.button("重新扫描环境变量").clicked() { self.ffmpeg_path = ffmpeg::find_ffmpeg(); }
                 } else {
-                    ui.label(RichText::new("❌ 未找到 ffmpeg，请安装或手动指定路径:").color(Color32::LIGHT_RED));
+                    ui.label(RichText::new("未找到 ffmpeg，请安装或手动指定路径:").color(Color32::LIGHT_RED));
                     ui.add_space(8.0);
-                    ui.horizontal(|ui| { 
-                        ui.label("自定义路径:"); 
+                    ui.horizontal(|ui| {
+                        ui.label("自定义路径:");
                         ui.add_sized([240.0, 24.0], egui::TextEdit::singleline(&mut self.ffmpeg_custom_path));
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("📂 浏览...").clicked() {
+                        if ui.button("浏览...").clicked() {
                             if let Some(path) = rfd::FileDialog::new().pick_file() { self.ffmpeg_custom_path = path.to_string_lossy().to_string(); }
                         }
-                        if ui.button("✔ 确认路径").clicked() {
+                        if ui.button("确认路径").clicked() {
                             let p = PathBuf::from(&self.ffmpeg_custom_path);
                             if p.exists() { ffmpeg::set_ffmpeg_path(p.clone()); self.ffmpeg_path = Some(p); self.ffmpeg_error = false; close = true; }
                         }
@@ -799,15 +806,15 @@ impl VideoTaggerApp {
                     if ui.add_sized([100.0, 32.0], egui::Button::new("关闭")).clicked() { close = true; }
                 });
             });
-            
+
         if close { self.ffmpeg_dialog_open = false; }
     }
 
     pub(super) fn render_completion_dialog(&mut self, ctx: &egui::Context) {
         if !self.show_completion { return; }
-        
+
         let mut close = false;
-        egui::Window::new("🎉 恭喜")
+        egui::Window::new("完成")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -821,16 +828,16 @@ impl VideoTaggerApp {
                 });
                 ui.add_space(8.0);
             });
-            
+
         if close { self.show_completion = false; }
     }
 
     pub(super) fn render_star_hint_dialog(&mut self, ctx: &egui::Context) {
         if !self.show_star_hint { return; }
-        
+
         let bg_color = if self.is_starred { Color32::from_rgb(180, 140, 30) } else { Color32::from_rgb(50, 60, 80) };
-        
-        egui::Window::new("⭐ 打星确认阶段")
+
+        egui::Window::new("打星确认阶段")
             .title_bar(false)
             .collapsible(false)
             .resizable(false)
@@ -838,10 +845,10 @@ impl VideoTaggerApp {
             .frame(egui::Frame::window(&ctx.style()).fill(bg_color).rounding(8.0).stroke(Stroke::new(1.0, Color32::WHITE)).inner_margin(Margin::same(16.0)))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    let text = if self.is_starred { 
-                        "⭐ 已经标记为重要 (星标)\n\n按任意键取消 | 按 Enter 保存并进行下一个" 
-                    } else { 
-                        "⚪ 未标记星标\n\n按任意键打星 | 按 Enter 保存并进行下一个" 
+                    let text = if self.is_starred {
+                        "已标记星标\n\n按任意键取消 | 按 Enter 保存并进行下一个"
+                    } else {
+                        "未标记星标\n\n按任意键打星 | 按 Enter 保存并进行下一个"
                     };
                     ui.label(RichText::new(text).size(16.0).color(Color32::WHITE).strong());
                 });
