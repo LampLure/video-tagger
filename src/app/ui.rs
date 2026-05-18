@@ -127,16 +127,25 @@ impl VideoTaggerApp {
         ui.add_space(8.0);
 
         let filtered = self.sorted_filtered_indices();
-        let card_w = 210.0;
-        let thumb_size = Vec2::new(190.0, 112.0);
-        let spacing = 10.0;
-        let cols = (ui.available_width() / (card_w + spacing)).max(1.0) as usize;
+        let spacing = 12.0;
+        let scrollbar_reserve = 24.0;
+        let available = (ui.available_width() - scrollbar_reserve).max(240.0);
+        let target_card_w = 220.0;
+        let cols = ((available + spacing) / (target_card_w + spacing)).floor().max(1.0) as usize;
+        let card_w = ((available - spacing * (cols.saturating_sub(1) as f32)) / cols as f32).floor().clamp(180.0, 260.0);
+        let thumb_w = (card_w - 16.0).max(160.0);
+        let thumb_h = thumb_w * 9.0 / 16.0;
+        let card_h = thumb_h + 56.0;
 
-        egui::ScrollArea::vertical().id_salt("overview_scroll").show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("overview_scroll").auto_shrink([false, false]).show(ui, |ui| {
             for chunk in filtered.chunks(cols) {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = spacing;
                     for &video_idx in chunk {
-                        self.render_thumbnail_card(ui, video_idx, thumb_size, card_w);
+                        self.render_thumbnail_card(ui, video_idx, Vec2::new(thumb_w, thumb_h), Vec2::new(card_w, card_h));
+                    }
+                    for _ in chunk.len()..cols {
+                        ui.allocate_exact_size(Vec2::new(card_w, card_h), egui::Sense::hover());
                     }
                 });
                 ui.add_space(spacing);
@@ -144,21 +153,27 @@ impl VideoTaggerApp {
         });
     }
 
-    fn render_thumbnail_card(&mut self, ui: &mut egui::Ui, video_idx: usize, thumb_size: Vec2, card_w: f32) {
+    fn render_thumbnail_card(&mut self, ui: &mut egui::Ui, video_idx: usize, thumb_size: Vec2, card_size: Vec2) {
         let filename = self.videos[video_idx].filename.clone();
         let processed = self.is_processed(video_idx);
         let mut open_edit = false;
-        egui::Frame::group(ui.style())
-            .fill(if processed { Color32::from_rgb(35, 48, 35) } else { Color32::from_gray(28) })
-            .show(ui, |ui| {
-                ui.set_width(card_w);
-                let (rect, response) = ui.allocate_exact_size(thumb_size, egui::Sense::click());
-                self.paint_thumbnail(ui, rect, video_idx, "加载中");
-                if response.double_clicked() { open_edit = true; }
-                ui.add_space(4.0);
-                ui.label(RichText::new(if processed { "已分拣" } else { "未分拣" }).small().color(if processed { Color32::LIGHT_GREEN } else { Color32::from_gray(150) }));
-                ui.label(RichText::new(filename).small());
-            });
+        let fill = if processed { Color32::from_rgb(35, 48, 35) } else { Color32::from_gray(28) };
+        let inner = egui::Frame::group(ui.style()).fill(fill).inner_margin(6.0).show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                card_size - Vec2::new(12.0, 12.0),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    let (rect, response) = ui.allocate_exact_size(thumb_size, egui::Sense::click());
+                    self.paint_thumbnail(ui, rect, video_idx, "加载中");
+                    if response.double_clicked() { open_edit = true; }
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(if processed { "已分拣" } else { "未分拣" }).small().color(if processed { Color32::LIGHT_GREEN } else { Color32::from_gray(150) }));
+                    ui.add_sized([thumb_size.x, 32.0], egui::Label::new(RichText::new(filename).small()).truncate());
+                },
+            );
+        });
+        let response = inner.response.interact(egui::Sense::click());
+        if response.double_clicked() { open_edit = true; }
         if open_edit { self.begin_edit_video(video_idx, true); }
     }
 
@@ -226,7 +241,8 @@ impl VideoTaggerApp {
             let Some(video_idx) = self.thumbnail_queue.pop_front() else { break; };
             let Some(video) = self.videos.get(video_idx).cloned() else { continue; };
             let tx = self.thumbnail_tx.clone();
-            let thumb_path = config::cache_dir().join("thumbs").join(format!("thumb_{}.png", video_idx));
+            let video_hash = ScreenshotCache::video_hash(&video.path);
+            let thumb_path = config::cache_dir().join("thumbs").join(format!("thumb_{}.png", video_hash));
             std::thread::spawn(move || {
                 let result = (|| -> Result<Vec<u8>, String> {
                     if let Some(parent) = thumb_path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
@@ -411,13 +427,17 @@ impl VideoTaggerApp {
                 let name = self.videos[i].filename.clone();
                 let fill = if is_current { Color32::from_rgb(60, 100, 180) } else if processed { Color32::from_rgb(35, 70, 35) } else { Color32::from_gray(32) };
                 egui::Frame::NONE.fill(fill).inner_margin(4.0).show(ui, |ui| {
-                    let response = ui.vertical(|ui| {
-                        let (rect, image_resp) = ui.allocate_exact_size(Vec2::new(120.0, 68.0), egui::Sense::click());
-                        self.paint_thumbnail(ui, rect, i, "...");
-                        ui.label(RichText::new(format!("{}{}", if is_current { "▶ " } else { "" }, i + 1)).strong());
-                        ui.label(RichText::new(name).small());
-                        image_resp
-                    }).response;
+                    let response = ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), 120.0),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let (rect, image_resp) = ui.allocate_exact_size(Vec2::new(132.0, 74.0), egui::Sense::click());
+                            self.paint_thumbnail(ui, rect, i, "...");
+                            ui.label(RichText::new(format!("{}{}", if is_current { "▶ " } else { "" }, i + 1)).strong());
+                            ui.add_sized([ui.available_width(), 28.0], egui::Label::new(RichText::new(name).small()).truncate());
+                            image_resp
+                        },
+                    ).response;
                     if response.clicked() { clicked = Some(i); }
                 });
                 ui.add_space(6.0);
