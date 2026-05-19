@@ -26,9 +26,10 @@ impl VideoTaggerApp {
                 });
                 ui.add_space(8.0);
                 let output_h = 230.0;
-                let shot_h = (ui.available_height() - output_h - 14.0).clamp(260.0, 620.0);
+                let shot_h = (ui.available_height() - output_h - 42.0).clamp(260.0, 620.0);
                 self.render_ai_screenshots_simple(ui, ctx, shot_h);
-                ui.add_space(8.0);
+                let remaining_gap = (ui.available_height() - output_h).max(8.0);
+                ui.add_space(remaining_gap.min(34.0));
                 ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), output_h), egui::Layout::top_down(egui::Align::Min), |ui| self.render_ai_output_area(ui));
             });
             ui.separator();
@@ -91,6 +92,7 @@ impl VideoTaggerApp {
     fn render_ai_video_queue_simple(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("视频队列").strong().size(15.0));
         ui.separator();
+        let mut clicked: Option<usize> = None;
         egui::ScrollArea::vertical().id_salt("ai_video_queue").show(ui, |ui| {
             for i in 0..self.videos.len() {
                 let name = self.videos[i].filename.clone();
@@ -100,9 +102,10 @@ impl VideoTaggerApp {
                 let thumb_w = (w - 42.0).clamp(150.0, 240.0);
                 let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
                 let card_h = (thumb_h + 72.0).max(150.0);
-                ai_frame().fill(fill).show(ui, |ui| {
+                let inner = ai_frame().fill(fill).show(ui, |ui| {
                     ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
+                        let (rect, thumb_response) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::click());
+                        if thumb_response.clicked() { clicked = Some(i); }
                         if let Some(texture) = self.overview_thumbnails.get(&i) {
                             ui.put(rect, egui::Image::new(texture).fit_to_exact_size(rect.size()));
                         } else if let Some(reason) = self.thumbnail_errors.get(&i) {
@@ -121,8 +124,16 @@ impl VideoTaggerApp {
                         ui.add_sized([ui.available_width().max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
                     });
                 });
+                if inner.response.interact(egui::Sense::click()).clicked() { clicked = Some(i); }
                 ui.add_space(8.0);
             }
         });
+        if let Some(i) = clicked {
+            if self.ai_batch_state != AiBatchState::Running {
+                self.switch_to_video(i, false);
+            } else {
+                self.ai_notice = Some("AI 正在分析中，不能手动切换视频。请先取消或等待当前视频完成。".to_string());
+            }
+        }
     }
 }
