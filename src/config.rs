@@ -223,22 +223,64 @@ pub fn parse_video_name(stem: &str) -> Option<ParsedVideoName> {
     let mut starred = false;
     let mut labels = Vec::new();
     while rest.starts_with('[') {
-        let end = rest.find(']')?;
-        let val = rest.get(1..end)?.to_string();
-        if val == "★" { starred = true; } else { labels.push(val); }
-        rest = rest.get(end + 1..)?;
+        let end = match rest.find(']') { Some(end) => end, None => break };
+        let token = rest.get(1..end).unwrap_or_default().to_string();
+        rest = rest.get(end + 1..).unwrap_or_default();
+        if token == "★" { starred = true; }
+        else if !token.is_empty() { labels.push(token); }
     }
 
     let mut score = None;
     if rest.starts_with("{point") {
         if let Some(end) = rest.find('}') {
-            let raw = rest.get(6..end)?;
-            if raw.len() == 3 && raw.chars().all(|c| c.is_ascii_digit()) {
-                score = raw.parse::<u8>().ok();
+            let token = rest.get(6..end).unwrap_or_default();
+            if token.len() == 3 && token.chars().all(|c| c.is_ascii_digit()) {
+                score = token.parse::<u8>().ok().map(|s| s.min(100));
+                rest = rest.get(end + 1..).unwrap_or_default();
             }
-            rest = rest.get(end + 1..)?;
         }
     }
 
     Some(ParsedVideoName { identifier, index, starred, labels, score, original_stem: rest.to_string() })
+}
+
+pub fn format_video_name(
+    identifier: &str,
+    index: usize,
+    digit_count: usize,
+    labels: &[String],
+    starred: bool,
+    original_basename: &str,
+    extension: &str,
+    overwrite: bool,
+) -> String {
+    let num = format!("{:0width$}", index + 1, width = digit_count);
+    let star = if starred { "[★]" } else { "" };
+    let mut score: Option<u8> = None;
+    let label_str: String = labels
+        .iter()
+        .filter_map(|label| {
+            let clean = sanitize_filename(label);
+            if clean.len() == 8 && clean.starts_with("point") && clean[5..].chars().all(|c| c.is_ascii_digit()) {
+                score = clean[5..].parse::<u8>().ok().map(|s| s.min(100));
+                None
+            } else if clean.is_empty() {
+                None
+            } else {
+                Some(format!("[{}]", clean))
+            }
+        })
+        .collect();
+    let score_str = score.map(|s| format!("{{point{:03}}}", s.min(100))).unwrap_or_default();
+    let ext = extension.trim_start_matches('.');
+
+    if overwrite {
+        format!("[{identifier}][{num}]{star}{label_str}{score_str}.{ext}")
+    } else {
+        let original = parse_video_name(original_basename)
+            .map(|p| p.original_stem)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| original_basename.to_string());
+        format!("[{identifier}][{num}]{star}{label_str}{score_str}{original}.{ext}")
+    }
 }
