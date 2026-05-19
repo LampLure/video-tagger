@@ -12,6 +12,43 @@ impl VideoTaggerApp {
         config::app_data_dir().join("ai_text_settings.json")
     }
 
+    fn sync_ai_active_record(&mut self) {
+        if let Some(record) = self.ai_log_records.back_mut() {
+            if record.is_active && record.video_index == self.current_video_index {
+                record.lines = self.ai_log.clone();
+            }
+        }
+    }
+
+    fn finish_ai_active_record(&mut self) {
+        self.sync_ai_active_record();
+        if let Some(record) = self.ai_log_records.back_mut() {
+            record.is_active = false;
+        }
+    }
+
+    fn start_ai_log_record(&mut self) {
+        self.ai_log.clear();
+        let filename = self.videos.get(self.current_video_index).map(|v| v.filename.clone()).unwrap_or_default();
+        if let Some(record) = self.ai_log_records.back_mut() {
+            record.is_active = false;
+        }
+        self.ai_log_records.push_back(AiLogRecord {
+            title: format!("第 {} 个视频：{}", self.current_video_index + 1, filename),
+            video_index: self.current_video_index,
+            lines: Vec::new(),
+            is_active: true,
+        });
+        while self.ai_log_records.len() > 5 {
+            self.ai_log_records.pop_front();
+        }
+    }
+
+    fn push_ai_log(&mut self, text: impl Into<String>) {
+        self.ai_log.push(text.into());
+        self.sync_ai_active_record();
+    }
+
     pub(super) fn ensure_ai_text_settings_file(&mut self) -> Result<PathBuf, String> {
         let path = self.ai_text_settings_path();
         if let Some(parent) = path.parent() {
@@ -231,13 +268,13 @@ impl VideoTaggerApp {
             return;
         };
         self.ai_work_id = self.ai_work_id.wrapping_add(1);
-        self.ai_log.clear();
+        self.start_ai_log_record();
         self.ai_pending_result = None;
         self.ai_batch_state = AiBatchState::Running;
         self.screenshot_textures.clear();
-        self.ai_log.push(format!("AI：准备分析第 {} 个视频。", self.current_video_index + 1));
+        self.push_ai_log(format!("AI：准备分析第 {} 个视频。", self.current_video_index + 1));
         if !props.audio && self.config.ai_audio_clips_per_batch > 0 {
-            self.ai_log.push("AI：当前模型不支持音频，本视频仅基于画面分析。".to_string());
+            self.push_ai_log("AI：当前模型不支持音频，本视频仅基于画面分析。".to_string());
         }
         let job = AiVideoJob {
             video: self.videos[self.current_video_index].clone(),
@@ -263,7 +300,8 @@ impl VideoTaggerApp {
         self.ai_service_state = AiServiceState::Disconnected;
         self.ai_service_props = None;
         self.ai_pending_result = None;
-        self.ai_log.push("AI：已取消分析，并强制关闭模型服务。".to_string());
+        self.push_ai_log("AI：已取消分析，并强制关闭模型服务。".to_string());
+        self.finish_ai_active_record();
     }
 
     pub(super) fn accept_ai_pending_result(&mut self) {
@@ -272,6 +310,7 @@ impl VideoTaggerApp {
         self.current_labels.push(ai::point_label(result.score));
         self.ai_pending_result = None;
         self.ai_batch_state = AiBatchState::Idle;
+        self.finish_ai_active_record();
         self.finalize_current_video();
         self.ai_success_count += 1;
         if self.app_mode == AppMode::Sorting && self.current_video_index < self.videos.len() {
@@ -283,7 +322,7 @@ impl VideoTaggerApp {
 
     pub(super) fn retry_ai_current_video(&mut self) {
         self.ai_pending_result = None;
-        self.ai_log.clear();
+        self.finish_ai_active_record();
         self.start_current_ai_video();
     }
 
@@ -292,6 +331,7 @@ impl VideoTaggerApp {
             self.current_labels = result.labels.clone();
             self.current_labels.push(ai::point_label(result.score));
             self.ai_batch_state = AiBatchState::Idle;
+            self.finish_ai_active_record();
             self.finalize_current_video();
             self.ai_success_count += 1;
             if self.app_mode == AppMode::Sorting && self.current_video_index < self.videos.len() {
@@ -302,7 +342,7 @@ impl VideoTaggerApp {
         } else {
             self.ai_pending_result = Some(result);
             self.ai_batch_state = AiBatchState::AwaitingConfirmation;
-            self.ai_log.push("AI：等待确认。Space 接受，Delete 重新生成。".to_string());
+            self.push_ai_log("AI：等待确认。Space 接受，Delete 重新生成。".to_string());
         }
     }
 
@@ -311,8 +351,9 @@ impl VideoTaggerApp {
         ai::save_raw_log("ai_failures.log", &format!("{}: {}\n", filename, reason));
         if self.config.ai_auto_accept {
             self.ai_failures.push(AiFailureRecord { filename, reason: reason.clone() });
-            self.ai_log.push(format!("AI：当前视频分析失败，已跳过。原因：{}", reason));
+            self.push_ai_log(format!("AI：当前视频分析失败，已跳过。原因：{}", reason));
             self.ai_batch_state = AiBatchState::Idle;
+            self.finish_ai_active_record();
             self.skip_current_video();
             if self.app_mode == AppMode::Sorting && self.current_video_index < self.videos.len() {
                 self.start_current_ai_video();
@@ -321,12 +362,14 @@ impl VideoTaggerApp {
             }
         } else {
             self.ai_batch_state = AiBatchState::Idle;
-            self.ai_log.push(format!("AI：当前视频分析失败，已停止。原因：{}", reason));
+            self.push_ai_log(format!("AI：当前视频分析失败，已停止。原因：{}", reason));
+            self.finish_ai_active_record();
         }
     }
 
     fn finish_ai_batch_summary(&mut self) {
         self.ai_batch_state = AiBatchState::Idle;
+        self.finish_ai_active_record();
         let mut text = format!("AI 分析完成。成功：{} 个，失败：{} 个。", self.ai_success_count, self.ai_failures.len());
         if !self.ai_failures.is_empty() {
             text.push_str("\n失败文件：");
@@ -364,6 +407,7 @@ impl VideoTaggerApp {
                         } else {
                             self.ai_log.push(text);
                         }
+                        self.sync_ai_active_record();
                         changed = true;
                     }
                     Ok(AiEvent::Preview { work_id, paths, times: _ }) if work_id == self.ai_work_id => {
