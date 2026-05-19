@@ -37,28 +37,32 @@ impl VideoTaggerApp {
         Ok(())
     }
 
-    pub(super) fn open_ai_text_settings_file(&mut self) -> Result<(), String> {
-        let path = self.ensure_ai_text_settings_file()?;
+    fn open_path_with_system(path: &PathBuf, label: &str) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         let mut cmd = {
             let mut c = std::process::Command::new("cmd");
-            c.arg("/C").arg("start").arg("").arg(&path);
+            c.arg("/C").arg("start").arg("").arg(path);
             c
         };
         #[cfg(target_os = "macos")]
         let mut cmd = {
             let mut c = std::process::Command::new("open");
-            c.arg(&path);
+            c.arg(path);
             c
         };
         #[cfg(all(unix, not(target_os = "macos")))]
         let mut cmd = {
             let mut c = std::process::Command::new("xdg-open");
-            c.arg(&path);
+            c.arg(path);
             c
         };
-        cmd.spawn().map_err(|e| format!("打开 AI 文本设置文件失败: {}", e))?;
+        cmd.spawn().map_err(|e| format!("打开 {} 失败: {}", label, e))?;
         Ok(())
+    }
+
+    pub(super) fn open_ai_text_settings_file(&mut self) -> Result<(), String> {
+        let path = self.ensure_ai_text_settings_file()?;
+        Self::open_path_with_system(&path, "AI 文本设置文件")
     }
 
     pub(super) fn reset_ai_text_settings_file(&mut self) -> Result<(), String> {
@@ -70,6 +74,20 @@ impl VideoTaggerApp {
         std::fs::write(&path, &text).map_err(|e| e.to_string())?;
         self.config.ai_text_settings = text;
         self.config.save();
+        Ok(())
+    }
+
+    pub(super) fn open_ai_prompt_template_file(&mut self) -> Result<(), String> {
+        let path = ai::ensure_ai_prompt_template_file()?;
+        Self::open_path_with_system(&path, "AI 提示词模板文件")
+    }
+
+    pub(super) fn reset_ai_prompt_template_file(&mut self) -> Result<(), String> {
+        let path = ai::ai_prompt_template_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, ai::default_ai_prompt_template()).map_err(|e| e.to_string())?;
         Ok(())
     }
 
