@@ -329,6 +329,23 @@ impl eframe::App for VideoTaggerApp {
             AppMode::Sorting => self.render_sorting(ui, ctx),
         });
 
+        if self.ai_mode && self.app_mode == AppMode::Sorting && !self.videos.is_empty() {
+            let screen = ctx.screen_rect();
+            let sidebar_w = 320.0;
+            let workspace_w = (screen.width() - sidebar_w).max(1.0);
+            let list_w = (workspace_w * 0.26).clamp(280.0, 410.0).min((workspace_w - 760.0).max(260.0));
+            let x = sidebar_w + 12.0;
+            let w = (screen.width() - sidebar_w - list_w - 36.0).max(420.0);
+            let y = (screen.bottom() - 260.0).max(360.0);
+            egui::Area::new("ai_output_workspace_panel".into())
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(x, y))
+                .show(ctx, |ui| {
+                    ui.set_width(w);
+                    self.render_ai_output_area(ui);
+                });
+        }
+
         if self.app_mode == AppMode::Sorting && !self.videos.is_empty() {
             egui::TopBottomPanel::bottom("progress_bar").show(ctx, |ui| {
                 let total = self.videos.len();
