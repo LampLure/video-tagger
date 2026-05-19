@@ -49,6 +49,17 @@ impl VideoTaggerApp {
         self.sync_ai_active_record();
     }
 
+    fn apply_ai_base_score(&mut self, mut result: AiAnalysisResult) -> AiAnalysisResult {
+        let old_score = result.score as i32;
+        let base = self.config.ai_base_score.min(100) as i32;
+        let corrected = (old_score - 50 + base).clamp(0, 100) as u8;
+        if corrected != result.score {
+            self.push_ai_log(format!("程序：按自定义基础分重新计算评分：解析分 {}，基础分 {}，最终分 {}。", result.score, base, corrected));
+        }
+        result.score = corrected;
+        result
+    }
+
     pub(super) fn ensure_ai_text_settings_file(&mut self) -> Result<PathBuf, String> {
         let path = self.ai_text_settings_path();
         if let Some(parent) = path.parent() {
@@ -306,6 +317,7 @@ impl VideoTaggerApp {
 
     pub(super) fn accept_ai_pending_result(&mut self) {
         let Some(result) = self.ai_pending_result.clone() else { return; };
+        let result = self.apply_ai_base_score(result);
         self.current_labels = result.labels.clone();
         self.current_labels.push(ai::point_label(result.score));
         self.ai_pending_result = None;
@@ -327,6 +339,7 @@ impl VideoTaggerApp {
     }
 
     fn handle_ai_done(&mut self, result: AiAnalysisResult) {
+        let result = self.apply_ai_base_score(result);
         if self.config.ai_auto_accept {
             self.current_labels = result.labels.clone();
             self.current_labels.push(ai::point_label(result.score));
