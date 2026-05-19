@@ -325,7 +325,27 @@ impl VideoTaggerApp {
             loop {
                 match rx.try_recv() {
                     Ok(AiEvent::Log { work_id, text }) if work_id == self.ai_work_id => {
-                        self.ai_log.push(text);
+                        if text == ai::AI_STREAM_START {
+                            self.ai_log.push("AI -> 程序：".to_string());
+                        } else if text == ai::AI_STREAM_END {
+                            if let Some(last) = self.ai_log.last_mut() {
+                                if last.starts_with("AI -> 程序：") {
+                                    last.push('\n');
+                                }
+                            }
+                        } else if let Some(delta) = text.strip_prefix(ai::AI_STREAM_DELTA) {
+                            if let Some(last) = self.ai_log.last_mut() {
+                                if last.starts_with("AI -> 程序：") {
+                                    last.push_str(delta);
+                                } else {
+                                    self.ai_log.push(format!("AI -> 程序：{}", delta));
+                                }
+                            } else {
+                                self.ai_log.push(format!("AI -> 程序：{}", delta));
+                            }
+                        } else {
+                            self.ai_log.push(text);
+                        }
                         changed = true;
                     }
                     Ok(AiEvent::Preview { work_id, paths, times: _ }) if work_id == self.ai_work_id => {
@@ -351,7 +371,7 @@ impl VideoTaggerApp {
             self.ai_rx = Some(rx);
         }
         if self.ai_batch_state == AiBatchState::Running || changed {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            ctx.request_repaint_after(Duration::from_millis(40));
         }
     }
 
