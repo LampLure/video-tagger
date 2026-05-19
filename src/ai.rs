@@ -49,6 +49,7 @@ pub enum ScoreDirection {
 pub struct AiTextSchema {
     pub tag_groups: Vec<TagGroupSchema>,
     pub score_rules: Vec<ScoreRuleSchema>,
+    pub detailed_score_breakdowns: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -167,23 +168,25 @@ pub fn default_ai_text_settings() -> String {
     { "name": "画面清晰", "direction": "add", "max_delta": 15 },
     { "name": "声音细节丰富", "direction": "add", "max_delta": 10 },
     { "name": "声音嘈杂", "direction": "subtract", "max_delta": 20 }
-  ]
+  ],
+  "detailed_score_breakdowns": {}
 }"#.to_string()
 }
 
 pub fn default_ai_prompt_template() -> String {
-    r#"你是 video-tagger 的本地 AI 视频分析器。你只能根据用户提供的图片、音频、视频长度、上一轮摘要、标签库、评分规则做判断。
+    r#"你是 video-tagger 的本地 AI 视频分析器。你只能根据用户提供的图片、音频、视频长度、上一轮摘要、标签库、评分规则、评分细则做判断。
 
 极重要约束：
 1. 标签只能从 tag_groups 中逐字复制，不能翻译，不能改写，不能创造新标签，不能输出韩语/日语/英文等标签库之外的字符。
 2. 每个标签栏最多选择 max_select 个标签，可以空选。
 3. tags 对象里的 key 必须逐字使用 tag_groups 的栏位名称。
 4. 评分基础分固定 50，只能使用 score_rules 中列出的评分项。
-5. 评分 delta 必须是整数。add 项范围 0 到 max_delta；subtract 项范围 -max_delta 到 0。
-6. final 分数范围 0 到 100。
-7. 输出必须是一个 JSON 对象，不要输出 Markdown，不要输出解释性正文。
-8. 如果证据不足，可以输出 status=need_more_samples；但如果 force_final=true，必须输出 status=final。
-9. 输出 final 前，请先在内部检查：每一个标签都必须能在 tag_groups 的 tags 数组中找到完全相同的字符串。
+5. 如果 detailed_score_breakdowns 中存在对应评分细则，必须优先按细则里的 mapping 判断 delta，不能自由发挥。
+6. 评分 delta 必须是整数。add 项范围 0 到 max_delta；subtract 项范围 -max_delta 到 0。
+7. final 分数范围 0 到 100。
+8. 输出必须是一个 JSON 对象，不要输出 Markdown，不要输出解释性正文。
+9. 如果证据不足，可以输出 status=need_more_samples；但如果 force_final=true，必须输出 status=final。
+10. 输出 final 前，请先在内部检查：每一个标签都必须能在 tag_groups 的 tags 数组中找到完全相同的字符串；每个评分项都必须能在 score_rules 中找到完全相同的名称。
 
 当前视频：{{video_name}}
 视频长度：{{duration}} 秒
@@ -196,6 +199,9 @@ force_final：{{force_final}}
 评分规则 score_rules：
 {{score_rules}}
 
+评分细则 detailed_score_breakdowns：
+{{detailed_score_breakdowns}}
+
 上一轮 working_summary：
 {{working_summary}}
 
@@ -203,7 +209,7 @@ final JSON 格式：
 {
   "status": "final",
   "tags": { "标签栏名称": ["标签"] },
-  "score": { "base": 50, "details": [{ "rule": "评分项名称", "delta": 0, "reason": "为什么给这个分" }], "final": 50 },
+  "score": { "base": 50, "details": [{ "rule": "评分项名称", "delta": 0, "reason": "为什么给这个分；如果使用了评分细则，请说明匹配了哪条 mapping" }], "final": 50 },
   "evidence": { "summary": "总体证据摘要", "tags": { "标签栏名称": "选择这些标签的依据" } },
   "working_summary": { "visual": "已观察到的画面摘要", "audio": "已观察到的音频摘要", "uncertainties": [] }
 }
@@ -225,10 +231,14 @@ pub fn ensure_ai_prompt_template_file() -> Result<PathBuf, String> {
 }
 
 fn load_prompt_template() -> String {
-    ensure_ai_prompt_template_file().ok()
+    let mut template = ensure_ai_prompt_template_file().ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(default_ai_prompt_template)
+        .unwrap_or_else(default_ai_prompt_template);
+    if !template.contains("{{detailed_score_breakdowns}}") {
+        template.push_str("\n\n评分细则 detailed_score_breakdowns：\n{{detailed_score_breakdowns}}\n");
+    }
+    template
 }
 
 pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
@@ -264,7 +274,49 @@ pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
             score_rules.push(ScoreRuleSchema { name, direction, max_delta });
         }
     }
-    Ok(AiTextSchema { tag_groups, score_rules })
+    let detailed_score_breakdowns = match root.get("detailed_score_breakdowns") {
+        Some(value) => {
+            if !value.is_object() { return Err("detailed_score_breakdowns 必须是对象".to_string()); }
+            validate_score_breakdowns(value, &score_rules)?;
+            value.clone()
+        }
+        None => json!({}),
+    };
+    Ok(AiTextSchema { tag_groups, score_rules, detailed_score_breakdowns })
+}
+
+fn validate_score_breakdowns(value: &Value, score_rules: &[ScoreRuleSchema]) -> Result<(), String> {
+    let rule_map: HashMap<&str, &ScoreRuleSchema> = score_rules.iter().map(|r| (r.name.as_str(), r)).collect();
+    fn walk(path: &str, value: &Value, rule_map: &HashMap<&str, &ScoreRuleSchema>) -> Result<(), String> {
+        if let Some(obj) = value.as_object() {
+            if obj.contains_key("rule_name") || obj.contains_key("mapping") {
+                let rule_name = obj.get("rule_name").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{}.rule_name 必须是非空字符串", path))?;
+                let Some(rule) = rule_map.get(rule_name) else { return Err(format!("{}.rule_name 不在 score_rules 中: {}", path, rule_name)); };
+                let mapping = obj.get("mapping").and_then(Value::as_array).ok_or_else(|| format!("{}.mapping 必须是数组", path))?;
+                if mapping.is_empty() { return Err(format!("{}.mapping 不能为空", path)); }
+                for (i, item) in mapping.iter().enumerate() {
+                    let item_path = format!("{}.mapping[{}]", path, i);
+                    let desc = item.get("description").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{}.description 必须是非空字符串", item_path))?;
+                    let score_value = item.get("score_value").and_then(Value::as_i64).ok_or_else(|| format!("{}.score_value 必须是整数", item_path))? as i32;
+                    if desc.is_empty() { return Err(format!("{}.description 不能为空", item_path)); }
+                    match rule.direction {
+                        ScoreDirection::Add => {
+                            if score_value < 0 || score_value > rule.max_delta { return Err(format!("{}.score_value 必须在 0..={}，当前 {}", item_path, rule.max_delta, score_value)); }
+                        }
+                        ScoreDirection::Subtract => {
+                            if score_value.abs() > rule.max_delta { return Err(format!("{}.score_value 绝对值不能超过 {}，当前 {}", item_path, rule.max_delta, score_value)); }
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            for (key, child) in obj {
+                walk(&format!("{}.{}", path, key), child, rule_map)?;
+            }
+        }
+        Ok(())
+    }
+    walk("detailed_score_breakdowns", value, &rule_map)
 }
 
 pub fn spawn_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) {
@@ -412,7 +464,7 @@ fn call_with_retry(job: &AiVideoJob, schema: &AiTextSchema, image_paths: &[PathB
 fn render_prompt_template(template: &str, video: &VideoFile, schema: &AiTextSchema, working_summary: &Value, force_final: bool, retry: bool, last_error: &str) -> String {
     let tag_groups_text: Vec<Value> = schema.tag_groups.iter().map(|g| json!({ "name": g.name, "max_select": g.max_select, "tags": g.tags })).collect();
     let score_rules_text: Vec<Value> = schema.score_rules.iter().map(|r| json!({ "name": r.name, "direction": match r.direction { ScoreDirection::Add => "add", ScoreDirection::Subtract => "subtract" }, "max_delta": r.max_delta })).collect();
-    let retry_text = if retry { format!("上次输出错误：{}。这次必须修正格式，尤其禁止输出标签库之外的标签。", last_error) } else { String::new() };
+    let retry_text = if retry { format!("上次输出错误：{}。这次必须修正格式，尤其禁止输出标签库之外的标签，并严格按评分细则打分。", last_error) } else { String::new() };
     let working_summary_text = if working_summary.is_null() { "null".to_string() } else { serde_json::to_string_pretty(working_summary).unwrap_or_default() };
     template
         .replace("{{video_name}}", &video.filename)
@@ -421,6 +473,7 @@ fn render_prompt_template(template: &str, video: &VideoFile, schema: &AiTextSche
         .replace("{{retry_text}}", &retry_text)
         .replace("{{tag_groups}}", &serde_json::to_string_pretty(&tag_groups_text).unwrap_or_default())
         .replace("{{score_rules}}", &serde_json::to_string_pretty(&score_rules_text).unwrap_or_default())
+        .replace("{{detailed_score_breakdowns}}", &serde_json::to_string_pretty(&schema.detailed_score_breakdowns).unwrap_or_else(|_| "{}".to_string()))
         .replace("{{working_summary}}", &working_summary_text)
 }
 
@@ -524,7 +577,7 @@ pub fn point_label(score: u8) -> String { format!("point{:03}", score.min(100)) 
 pub fn save_raw_log(name: &str, content: &str) {
     let dir = logs_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join(name), content);
+    let _ = std::fs::write(dir.join(name, ), content);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
