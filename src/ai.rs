@@ -94,6 +94,7 @@ enum AiModelDecision {
 
 pub fn models_dir() -> PathBuf { config::app_data_dir().join("models") }
 pub fn logs_dir() -> PathBuf { config::app_data_dir().join("logs") }
+pub fn ai_prompt_template_path() -> PathBuf { config::app_data_dir().join("ai_prompt_template.txt") }
 
 pub fn ensure_models_dir() -> PathBuf {
     let dir = models_dir();
@@ -158,37 +159,76 @@ pub fn stop_process_tree(child: &mut Child) {
 pub fn default_ai_text_settings() -> String {
     r#"{
   "tag_groups": {
-    "视频内容": {
-      "max_select": 3,
-      "tags": ["风景", "人文", "美食"]
-    },
-    "视频画质": {
-      "max_select": 1,
-      "tags": ["老电影", "清晰", "模糊"]
-    },
-    "声音类型": {
-      "max_select": 2,
-      "tags": ["无人声", "人声", "音乐", "嘈杂"]
-    }
+    "视频内容": { "max_select": 3, "tags": ["风景", "人文", "美食"] },
+    "视频画质": { "max_select": 1, "tags": ["老电影", "清晰", "模糊"] },
+    "声音类型": { "max_select": 2, "tags": ["无人声", "人声", "音乐", "嘈杂"] }
   },
   "score_rules": [
-    {
-      "name": "画面清晰",
-      "direction": "add",
-      "max_delta": 15
-    },
-    {
-      "name": "声音细节丰富",
-      "direction": "add",
-      "max_delta": 10
-    },
-    {
-      "name": "声音嘈杂",
-      "direction": "subtract",
-      "max_delta": 20
-    }
+    { "name": "画面清晰", "direction": "add", "max_delta": 15 },
+    { "name": "声音细节丰富", "direction": "add", "max_delta": 10 },
+    { "name": "声音嘈杂", "direction": "subtract", "max_delta": 20 }
   ]
 }"#.to_string()
+}
+
+pub fn default_ai_prompt_template() -> String {
+    r#"你是 video-tagger 的本地 AI 视频分析器。你只能根据用户提供的图片、音频、视频长度、上一轮摘要、标签库、评分规则做判断。
+
+极重要约束：
+1. 标签只能从 tag_groups 中逐字复制，不能翻译，不能改写，不能创造新标签，不能输出韩语/日语/英文等标签库之外的字符。
+2. 每个标签栏最多选择 max_select 个标签，可以空选。
+3. tags 对象里的 key 必须逐字使用 tag_groups 的栏位名称。
+4. 评分基础分固定 50，只能使用 score_rules 中列出的评分项。
+5. 评分 delta 必须是整数。add 项范围 0 到 max_delta；subtract 项范围 -max_delta 到 0。
+6. final 分数范围 0 到 100。
+7. 输出必须是一个 JSON 对象，不要输出 Markdown，不要输出解释性正文。
+8. 如果证据不足，可以输出 status=need_more_samples；但如果 force_final=true，必须输出 status=final。
+9. 输出 final 前，请先在内部检查：每一个标签都必须能在 tag_groups 的 tags 数组中找到完全相同的字符串。
+
+当前视频：{{video_name}}
+视频长度：{{duration}} 秒
+force_final：{{force_final}}
+{{retry_text}}
+
+标签库 tag_groups：
+{{tag_groups}}
+
+评分规则 score_rules：
+{{score_rules}}
+
+上一轮 working_summary：
+{{working_summary}}
+
+final JSON 格式：
+{
+  "status": "final",
+  "tags": { "标签栏名称": ["标签"] },
+  "score": { "base": 50, "details": [{ "rule": "评分项名称", "delta": 0, "reason": "为什么给这个分" }], "final": 50 },
+  "evidence": { "summary": "总体证据摘要", "tags": { "标签栏名称": "选择这些标签的依据" } },
+  "working_summary": { "visual": "已观察到的画面摘要", "audio": "已观察到的音频摘要", "uncertainties": [] }
+}
+
+need_more_samples JSON 格式：
+{
+  "status": "need_more_samples",
+  "reason": "为什么当前证据不足",
+  "working_summary": { "visual": "已观察到的画面摘要", "audio": "已观察到的音频摘要", "candidate_tags": { "标签栏名称": ["候选标签"] }, "uncertainties": [] }
+}
+"#.to_string()
+}
+
+pub fn ensure_ai_prompt_template_file() -> Result<PathBuf, String> {
+    let path = ai_prompt_template_path();
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if !path.exists() { std::fs::write(&path, default_ai_prompt_template()).map_err(|e| e.to_string())?; }
+    Ok(path)
+}
+
+fn load_prompt_template() -> String {
+    ensure_ai_prompt_template_file().ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(default_ai_prompt_template)
 }
 
 pub fn validate_ai_text_settings(text: &str) -> Result<AiTextSchema, String> {
@@ -241,10 +281,7 @@ fn send_log(tx: &mpsc::Sender<AiEvent>, work_id: u64, text: impl Into<String>) {
 fn compact_for_log(text: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, ch) in text.chars().enumerate() {
-        if i >= max_chars {
-            out.push_str("...");
-            return out;
-        }
+        if i >= max_chars { out.push_str("..."); return out; }
         out.push(ch);
     }
     out
@@ -349,12 +386,8 @@ fn call_with_retry(job: &AiVideoJob, schema: &AiTextSchema, image_paths: &[PathB
         save_raw_log("ai_last_prompt.txt", &prompt);
         send_log(tx, job.work_id, format!("程序 -> AI：发送提示词，force_final={}，重试={}。完整提示词已保存到 logs/ai_last_prompt.txt。", force_final, attempt == 1));
         send_log(tx, job.work_id, format!("程序 -> AI：提示词预览：{}", compact_for_log(&prompt.replace('\n', " "), 420)));
-        if !image_paths.is_empty() {
-            send_log(tx, job.work_id, format!("程序 -> AI：附加图片 {} 张：{}", image_paths.len(), image_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、")));
-        }
-        if !audio_paths.is_empty() {
-            send_log(tx, job.work_id, format!("程序 -> AI：附加音频 {} 段：{}", audio_paths.len(), audio_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、")));
-        }
+        if !image_paths.is_empty() { send_log(tx, job.work_id, format!("程序 -> AI：附加图片 {} 张：{}", image_paths.len(), image_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、"))); }
+        if !audio_paths.is_empty() { send_log(tx, job.work_id, format!("程序 -> AI：附加音频 {} 段：{}", audio_paths.len(), audio_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、"))); }
         let raw = call_llama(&prompt, image_paths, audio_paths, job.runtime.stream_idle_timeout_seconds, tx, job.work_id)?;
         send_log(tx, job.work_id, "AI：已收到模型输出，正在校验格式。".to_string());
         save_raw_log("ai_last_raw_response.txt", &raw);
@@ -362,12 +395,8 @@ fn call_with_retry(job: &AiVideoJob, schema: &AiTextSchema, image_paths: &[PathB
         match parse_model_decision(&raw, schema, force_final) {
             Ok(decision) => {
                 match &decision {
-                    AiModelDecision::Final(result) => {
-                        send_log(tx, job.work_id, format!("程序：解析到 final。标签={}，评分={}。", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") }, result.score));
-                    }
-                    AiModelDecision::NeedMore { reason, .. } => {
-                        send_log(tx, job.work_id, format!("程序：解析到 need_more_samples。原因：{}", reason));
-                    }
+                    AiModelDecision::Final(result) => send_log(tx, job.work_id, format!("程序：解析到 final。标签={}，评分={}。", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") }, result.score)),
+                    AiModelDecision::NeedMore { reason, .. } => send_log(tx, job.work_id, format!("程序：解析到 need_more_samples。原因：{}", reason)),
                 }
                 return Ok(decision);
             }
@@ -380,44 +409,23 @@ fn call_with_retry(job: &AiVideoJob, schema: &AiTextSchema, image_paths: &[PathB
     Err(last_error)
 }
 
-fn build_prompt(video: &VideoFile, schema: &AiTextSchema, working_summary: &Value, force_final: bool, retry: bool, last_error: &str) -> String {
+fn render_prompt_template(template: &str, video: &VideoFile, schema: &AiTextSchema, working_summary: &Value, force_final: bool, retry: bool, last_error: &str) -> String {
     let tag_groups_text: Vec<Value> = schema.tag_groups.iter().map(|g| json!({ "name": g.name, "max_select": g.max_select, "tags": g.tags })).collect();
     let score_rules_text: Vec<Value> = schema.score_rules.iter().map(|r| json!({ "name": r.name, "direction": match r.direction { ScoreDirection::Add => "add", ScoreDirection::Subtract => "subtract" }, "max_delta": r.max_delta })).collect();
-    format!(r#"你是 video-tagger 的本地 AI 视频分析器。你只能根据用户提供的图片、音频、视频长度、上一轮摘要、标签库、评分规则做判断。
-硬性规则：
-1. 标签只能从 tag_groups 中选择，不能创造新标签。
-2. 每个标签栏最多选择 max_select 个标签，可以空选。
-3. 标签输出必须按 tag_groups 的栏位名称组织。
-4. 评分基础分固定 50，只能使用 score_rules 中列出的评分项。
-5. 评分 delta 必须是整数。add 项范围 0 到 max_delta；subtract 项范围 -max_delta 到 0。
-6. final 分数范围 0 到 100。
-7. 输出必须是一个 JSON 对象，不要输出 Markdown，不要输出解释性正文。
-8. 如果证据不足，可以输出 status=need_more_samples；但如果 force_final=true，必须输出 status=final。
-当前视频：{video_name}
-视频长度：{duration:.1} 秒
-force_final：{force_final}
-{retry_text}
-标签库 tag_groups：
-{tag_groups}
-评分规则 score_rules：
-{score_rules}
-上一轮 working_summary：
-{working_summary}
-final JSON 格式：
-{{
-  "status": "final",
-  "tags": {{ "标签栏名称": ["标签"] }},
-  "score": {{ "base": 50, "details": [{{ "rule": "评分项名称", "delta": 0, "reason": "为什么给这个分" }}], "final": 50 }},
-  "evidence": {{ "summary": "总体证据摘要", "tags": {{ "标签栏名称": "选择这些标签的依据" }} }},
-  "working_summary": {{ "visual": "已观察到的画面摘要", "audio": "已观察到的音频摘要", "uncertainties": [] }}
-}}
-need_more_samples JSON 格式：
-{{
-  "status": "need_more_samples",
-  "reason": "为什么当前证据不足",
-  "working_summary": {{ "visual": "已观察到的画面摘要", "audio": "已观察到的音频摘要", "candidate_tags": {{ "标签栏名称": ["候选标签"] }}, "uncertainties": [] }}
-}}
-"#, video_name = video.filename, duration = video.duration_secs.unwrap_or(0.0), force_final = force_final, retry_text = if retry { format!("上次输出错误：{}。这次必须修正格式。", last_error) } else { String::new() }, tag_groups = serde_json::to_string_pretty(&tag_groups_text).unwrap_or_default(), score_rules = serde_json::to_string_pretty(&score_rules_text).unwrap_or_default(), working_summary = if working_summary.is_null() { "null".to_string() } else { serde_json::to_string_pretty(working_summary).unwrap_or_default() })
+    let retry_text = if retry { format!("上次输出错误：{}。这次必须修正格式，尤其禁止输出标签库之外的标签。", last_error) } else { String::new() };
+    let working_summary_text = if working_summary.is_null() { "null".to_string() } else { serde_json::to_string_pretty(working_summary).unwrap_or_default() };
+    template
+        .replace("{{video_name}}", &video.filename)
+        .replace("{{duration}}", &format!("{:.1}", video.duration_secs.unwrap_or(0.0)))
+        .replace("{{force_final}}", if force_final { "true" } else { "false" })
+        .replace("{{retry_text}}", &retry_text)
+        .replace("{{tag_groups}}", &serde_json::to_string_pretty(&tag_groups_text).unwrap_or_default())
+        .replace("{{score_rules}}", &serde_json::to_string_pretty(&score_rules_text).unwrap_or_default())
+        .replace("{{working_summary}}", &working_summary_text)
+}
+
+fn build_prompt(video: &VideoFile, schema: &AiTextSchema, working_summary: &Value, force_final: bool, retry: bool, last_error: &str) -> String {
+    render_prompt_template(&load_prompt_template(), video, schema, working_summary, force_final, retry, last_error)
 }
 
 fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], idle_timeout_seconds: u64, tx: &mpsc::Sender<AiEvent>, work_id: u64) -> Result<String, String> {
