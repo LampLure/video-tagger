@@ -200,6 +200,8 @@ impl VideoTaggerApp {
                         AiBatchState::AwaitingConfirmation => "等待确认：Space 接受 / Delete 重生",
                     };
                     ui.label(RichText::new(status).small().color(Color32::from_gray(170)));
+                    ui.separator();
+                    ui.label(RichText::new(format!("保留最近 {} 条", self.ai_log_records.len().min(5))).small().color(Color32::from_gray(130)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.ai_batch_state == AiBatchState::Running || self.ai_batch_state == AiBatchState::AwaitingConfirmation {
                             if ui.button("取消 AI 分析").clicked() { self.request_cancel_ai(); }
@@ -220,15 +222,41 @@ impl VideoTaggerApp {
                     ui.label(RichText::new("Space 接受，Delete 重新生成。" ).small().color(Color32::YELLOW));
                     ui.separator();
                 }
-                egui::ScrollArea::vertical().stick_to_bottom(true).max_height(190.0).auto_shrink([false, false]).show(ui, |ui| {
-                    if self.ai_log.is_empty() {
-                        ui.label(RichText::new("AI 实时分析日志会显示在这里。" ).color(Color32::from_gray(140)));
-                    } else {
-                        for line in &self.ai_log {
-                            ui.label(RichText::new(line).color(Color32::from_gray(225)));
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.ai_log_records.is_empty() {
+                            ui.label(RichText::new("AI 实时分析日志会显示在这里。" ).color(Color32::from_gray(140)));
+                            return;
                         }
-                    }
-                });
+                        for record in &self.ai_log_records {
+                            let fill = if record.is_active { Color32::from_rgb(18, 34, 54) } else { Color32::from_rgb(18, 25, 36) };
+                            let stroke = if record.is_active { Color32::from_rgb(75, 125, 190) } else { Color32::from_rgb(35, 62, 95) };
+                            egui::Frame::none()
+                                .fill(fill)
+                                .stroke(egui::Stroke::new(1.0, stroke))
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::same(8))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(&record.title).strong().color(Color32::from_rgb(205, 230, 255)));
+                                        if record.is_active {
+                                            ui.label(RichText::new("当前输出中").small().color(Color32::YELLOW));
+                                        }
+                                    });
+                                    ui.separator();
+                                    if record.lines.is_empty() {
+                                        ui.label(RichText::new("等待日志..." ).color(Color32::from_gray(140)));
+                                    } else {
+                                        for line in &record.lines {
+                                            ui.label(RichText::new(line).color(Color32::from_gray(225)));
+                                        }
+                                    }
+                                });
+                            ui.add_space(8.0);
+                        }
+                    });
             });
     }
 
