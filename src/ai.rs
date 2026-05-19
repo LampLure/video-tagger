@@ -577,7 +577,7 @@ pub fn point_label(score: u8) -> String { format!("point{:03}", score.min(100)) 
 pub fn save_raw_log(name: &str, content: &str) {
     let dir = logs_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join(name, ), content);
+    let _ = std::fs::write(dir.join(name), content);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
