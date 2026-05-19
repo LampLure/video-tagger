@@ -118,6 +118,8 @@ impl VideoTaggerApp {
             .default_open(true)
             .show(ui, |ui| {
                 if ui.checkbox(&mut self.config.ai_auto_accept, "自动接受").changed() { self.config.save(); }
+                ui.horizontal(|ui| { ui.label("基础分"); if ui.add(egui::DragValue::new(&mut self.config.ai_base_score).range(0..=100)).changed() { self.config.ai_base_score = self.config.ai_base_score.min(100); self.config.save(); } });
+                ui.label(RichText::new("最终评分按：基础分 + AI 输出 delta 重新计算。" ).small().color(Color32::from_gray(150)));
                 ui.horizontal(|ui| { ui.label("追加"); if ui.add(egui::DragValue::new(&mut self.config.ai_max_extra_sample_batches).range(0..=5)).changed() { self.config.save(); } });
                 ui.horizontal(|ui| { ui.label("像素"); if ui.add(egui::DragValue::new(&mut self.config.ai_image_max_pixels).range(8000..=500000).speed(1000)).changed() { self.config.save(); } });
                 ui.horizontal(|ui| { ui.label("JPG"); if ui.add(egui::DragValue::new(&mut self.config.ai_jpeg_quality).range(20..=95)).changed() { self.config.save(); } });
