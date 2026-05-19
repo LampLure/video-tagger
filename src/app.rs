@@ -51,6 +51,14 @@ pub enum AiBatchState {
     AwaitingConfirmation,
 }
 
+#[derive(Debug, Clone)]
+pub struct AiLogRecord {
+    pub title: String,
+    pub video_index: usize,
+    pub lines: Vec<String>,
+    pub is_active: bool,
+}
+
 pub enum ThumbnailResult {
     Loaded { index: usize, size: [usize; 2], rgba: Vec<u8> },
     Failed { index: usize, reason: String },
@@ -130,6 +138,7 @@ pub struct VideoTaggerApp {
     ai_service_props: Option<AiServiceProps>,
     ai_batch_state: AiBatchState,
     ai_log: Vec<String>,
+    ai_log_records: VecDeque<AiLogRecord>,
     ai_failures: Vec<AiFailureRecord>,
     ai_success_count: usize,
     ai_pending_result: Option<AiAnalysisResult>,
@@ -215,6 +224,7 @@ impl Default for VideoTaggerApp {
             ai_service_props: None,
             ai_batch_state: AiBatchState::Idle,
             ai_log: Vec::new(),
+            ai_log_records: VecDeque::new(),
             ai_failures: Vec::new(),
             ai_success_count: 0,
             ai_pending_result: None,
