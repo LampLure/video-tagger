@@ -1,5 +1,6 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,36 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<bool, String>
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!("ffmpeg 超时 {} 秒", timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("等待 ffmpeg 失败: {}", e)),
+        }
+    }
+}
+
+fn run_with_timeout_capture(mut cmd: Command, timeout: Duration) -> Result<(bool, String), String> {
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("启动 ffmpeg 失败: {}", e))?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_string(&mut stderr);
+                }
+                return Ok((status.success(), stderr.trim().to_string()));
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        let _ = pipe.read_to_string(&mut stderr);
+                    }
+                    return Err(format!("ffmpeg 超时 {} 秒{}", timeout.as_secs(), if stderr.trim().is_empty() { String::new() } else { format!(": {}", stderr.trim()) }));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -168,25 +199,73 @@ fn extract_audio_clip_internal(video_path: &Path, start_sec: f64, duration_secs:
         "-i", &video_path.to_string_lossy(), "-t", &format!("{:.3}", duration_secs), "-ac", "1", "-ar",
         &sr, "-acodec", "pcm_s16le", &output_path.to_string_lossy(),
     ]);
-    let status = run_with_timeout(cmd, Duration::from_secs(8))?;
-    if status { Ok(()) } else { Err("ffmpeg audio extraction failed".into()) }
+    let (status, stderr) = run_with_timeout_capture(cmd, Duration::from_secs(8))?;
+    if status { Ok(()) } else { Err(if stderr.is_empty() { "ffmpeg audio extraction failed".into() } else { format!("ffmpeg audio extraction failed: {}", stderr) }) }
+}
+
+fn extract_ai_raw_frame(video_path: &Path, time_sec: f64, output_path: &Path, accurate: bool) -> Result<(), String> {
+    if output_path.exists() { let _ = std::fs::remove_file(output_path); }
+    let mut cmd = ffmpeg_command();
+    cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-y");
+    if !accurate { cmd.arg("-ss").arg(format!("{:.3}", time_sec.max(0.0))); }
+    cmd.arg("-i").arg(video_path);
+    if accurate { cmd.arg("-ss").arg(format!("{:.3}", time_sec.max(0.0))); }
+    cmd.arg("-an").arg("-frames:v").arg("1").arg("-q:v").arg("2").arg(output_path);
+    let (status, stderr) = run_with_timeout_capture(cmd, Duration::from_secs(10))?;
+    if status && usable_image_file(output_path) {
+        Ok(())
+    } else {
+        Err(if stderr.is_empty() { format!("ffmpeg AI raw frame extraction failed at {:.3}s", time_sec) } else { format!("ffmpeg AI raw frame extraction failed at {:.3}s: {}", time_sec, stderr) })
+    }
+}
+
+fn resize_and_encode_ai_jpeg(raw_path: &Path, max_pixels: u32, jpeg_quality: u8, output_path: &Path) -> Result<(), String> {
+    let mut img = image::open(raw_path).map_err(|e| format!("AI 抽帧图片解码失败: {}", e))?;
+    let max_pixels = max_pixels.clamp(8_000, 500_000) as u64;
+    let pixels = img.width() as u64 * img.height() as u64;
+    if pixels > max_pixels {
+        let scale = (max_pixels as f64 / pixels as f64).sqrt();
+        let new_w = ((img.width() as f64 * scale).round() as u32).max(2);
+        let new_h = ((img.height() as f64 * scale).round() as u32).max(2);
+        img = img.resize(new_w, new_h, image::imageops::FilterType::Triangle);
+    }
+    let rgb = img.to_rgb8();
+    if output_path.exists() { let _ = std::fs::remove_file(output_path); }
+    let file = std::fs::File::create(output_path).map_err(|e| format!("创建 AI JPEG 失败: {}", e))?;
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, jpeg_quality.clamp(20, 95));
+    encoder.encode_image(&rgb).map_err(|e| format!("编码 AI JPEG 失败: {}", e))?;
+    if usable_image_file(output_path) { Ok(()) } else { Err("AI JPEG 输出文件无效或过小".into()) }
 }
 
 pub fn extract_ai_image(video_path: &Path, time_sec: f64, max_pixels: u32, jpeg_quality: u8, output_path: &Path) -> Result<(), String> {
     if let Some(parent) = output_path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
     if output_path.exists() { let _ = std::fs::remove_file(output_path); }
-    let max_pixels = max_pixels.clamp(8_000, 500_000);
-    let q = ((100u32.saturating_sub(jpeg_quality.clamp(20, 95) as u32)) / 12 + 2).clamp(2, 8).to_string();
-    let vf = format!(
-        "scale='if(gt(iw*ih,{p}),trunc(iw*sqrt({p}/(iw*ih))/2)*2,iw)':'if(gt(iw*ih,{p}),trunc(ih*sqrt({p}/(iw*ih))/2)*2,ih)'",
-        p = max_pixels
-    );
-    let mut cmd = ffmpeg_command();
-    cmd.args([
-        "-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{:.3}", time_sec.max(0.0)),
-        "-i", &video_path.to_string_lossy(), "-an", "-frames:v", "1", "-q:v", &q, "-vf", &vf,
-        &output_path.to_string_lossy(),
-    ]);
-    let status = run_with_timeout(cmd, Duration::from_secs(8))?;
-    if status && usable_image_file(output_path) { Ok(()) } else { Err("ffmpeg AI image extraction failed".into()) }
+    let raw_path = output_path.with_extension("raw_ai_frame.jpg");
+    let duration = get_video_duration(video_path).unwrap_or_else(|| time_sec.max(1.0) + 1.0).max(0.2);
+    let base = time_sec.clamp(0.0, (duration - 0.35).max(0.0));
+    let candidates = [
+        base,
+        (base - 0.25).max(0.0),
+        (base + 0.25).min((duration - 0.35).max(0.0)),
+        (duration * 0.5).clamp(0.0, (duration - 0.35).max(0.0)),
+        0.1_f64.min((duration - 0.35).max(0.0)),
+    ];
+    let mut last_err = String::new();
+    for seek in candidates {
+        for accurate in [false, true] {
+            match extract_ai_raw_frame(video_path, seek, &raw_path, accurate)
+                .and_then(|_| resize_and_encode_ai_jpeg(&raw_path, max_pixels, jpeg_quality, output_path)) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&raw_path);
+                    return Ok(());
+                }
+                Err(err) => {
+                    last_err = err;
+                    let _ = std::fs::remove_file(output_path);
+                    let _ = std::fs::remove_file(&raw_path);
+                }
+            }
+        }
+    }
+    Err(if last_err.is_empty() { "ffmpeg AI image extraction failed".into() } else { format!("ffmpeg AI image extraction failed: {}", last_err) })
 }
