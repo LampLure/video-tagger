@@ -8,6 +8,88 @@ impl VideoTaggerApp {
         }
     }
 
+    pub(super) fn ai_text_settings_path(&self) -> PathBuf {
+        config::app_data_dir().join("ai_text_settings.json")
+    }
+
+    pub(super) fn ensure_ai_text_settings_file(&mut self) -> Result<PathBuf, String> {
+        let path = self.ai_text_settings_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if !path.exists() {
+            let text = if self.config.ai_text_settings.trim().is_empty() {
+                ai::default_ai_text_settings()
+            } else {
+                self.config.ai_text_settings.clone()
+            };
+            std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        }
+        Ok(path)
+    }
+
+    pub(super) fn load_ai_text_settings_from_file(&mut self) -> Result<(), String> {
+        let path = self.ensure_ai_text_settings_file()?;
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("读取 AI 文本设置失败: {}", e))?;
+        ai::validate_ai_text_settings(&text)?;
+        self.config.ai_text_settings = text;
+        self.config.save();
+        Ok(())
+    }
+
+    pub(super) fn open_ai_text_settings_file(&mut self) -> Result<(), String> {
+        let path = self.ensure_ai_text_settings_file()?;
+        #[cfg(target_os = "windows")]
+        let mut cmd = {
+            let mut c = std::process::Command::new("cmd");
+            c.arg("/C").arg("start").arg("").arg(&path);
+            c
+        };
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let mut c = std::process::Command::new("open");
+            c.arg(&path);
+            c
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let mut cmd = {
+            let mut c = std::process::Command::new("xdg-open");
+            c.arg(&path);
+            c
+        };
+        cmd.spawn().map_err(|e| format!("打开 AI 文本设置文件失败: {}", e))?;
+        Ok(())
+    }
+
+    pub(super) fn reset_ai_text_settings_file(&mut self) -> Result<(), String> {
+        let path = self.ai_text_settings_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let text = ai::default_ai_text_settings();
+        std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+        self.config.ai_text_settings = text;
+        self.config.save();
+        Ok(())
+    }
+
+    pub(super) fn refresh_ai_props(&mut self) {
+        match ai::probe_llama_props(Duration::from_secs(3)) {
+            Ok(props) => {
+                let vision = props.vision;
+                let audio = props.audio;
+                self.ai_service_props = Some(props);
+                if self.ai_service_state == AiServiceState::Disconnected {
+                    self.ai_service_state = if self.ai_model_process.is_some() { AiServiceState::ConnectedOwned } else { AiServiceState::ConnectedExternal };
+                }
+                self.ai_notice = Some(format!("AI 能力已刷新：视觉{}，音频{}。", if vision { "可用" } else { "不可用" }, if audio { "可用" } else { "不可用" }));
+            }
+            Err(err) => {
+                self.ai_notice = Some(format!("刷新 AI 能力失败：{}", err));
+            }
+        }
+    }
+
     pub(super) fn ai_runtime_config(&self) -> AiRuntimeConfig {
         AiRuntimeConfig {
             image_max_pixels: self.config.ai_image_max_pixels,
@@ -40,18 +122,29 @@ impl VideoTaggerApp {
             Ok(child) => {
                 self.ai_model_process = Some(child);
                 let start = std::time::Instant::now();
+                let mut last_props: Option<AiServiceProps> = None;
                 loop {
                     match ai::probe_llama_props(Duration::from_secs(1)) {
                         Ok(props) => {
-                            self.ai_service_props = Some(props);
-                            self.ai_service_state = AiServiceState::ConnectedOwned;
-                            self.ai_notice = Some("AI 服务已连接。".to_string());
-                            return;
+                            if props.vision || props.audio || start.elapsed() >= Duration::from_secs(10) {
+                                self.ai_service_props = Some(props);
+                                self.ai_service_state = AiServiceState::ConnectedOwned;
+                                self.ai_notice = Some("AI 服务已连接。".to_string());
+                                return;
+                            }
+                            last_props = Some(props);
+                            std::thread::sleep(Duration::from_millis(500));
                         }
                         Err(_) if start.elapsed() < Duration::from_secs(10) => {
                             std::thread::sleep(Duration::from_millis(250));
                         }
                         Err(_) => {
+                            if let Some(props) = last_props {
+                                self.ai_service_props = Some(props);
+                                self.ai_service_state = AiServiceState::ConnectedOwned;
+                                self.ai_notice = Some("AI 服务已连接，但模型能力可能仍在加载。请稍后点击刷新能力。".to_string());
+                                return;
+                            }
                             self.ai_service_state = AiServiceState::Disconnected;
                             self.ai_notice = Some("AI 服务未连接成功，可能模型仍在加载、启动脚本错误，或端口不是 7080。".to_string());
                             return;
@@ -89,12 +182,16 @@ impl VideoTaggerApp {
             self.ai_notice = Some("请先启动并连接 AI 模型服务。".to_string());
             return;
         }
+        if let Err(err) = self.load_ai_text_settings_from_file() {
+            self.ai_notice = Some(err);
+            return;
+        }
         let Some(props) = self.ai_service_props.clone() else {
             self.ai_notice = Some("AI 服务状态未知，请重新检测或启动模型服务。".to_string());
             return;
         };
         if !props.vision {
-            self.ai_notice = Some("当前模型不支持图片输入，无法进行视频 AI 打标签。".to_string());
+            self.ai_notice = Some("当前模型不支持图片输入，无法进行视频 AI 打标签。请稍后点击刷新能力；如果仍不可用，请检查 /props。".to_string());
             return;
         }
         if let Err(err) = ai::validate_ai_text_settings(&self.config.ai_text_settings) {
