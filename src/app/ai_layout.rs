@@ -95,9 +95,28 @@ impl VideoTaggerApp {
             for i in 0..self.videos.len() {
                 let name = self.videos[i].filename.clone();
                 let current = i == self.current_video_index;
-                let fill = if current { Color32::from_rgb(38, 62, 105) } else { Color32::from_rgb(24, 34, 24) };
+                let fill = if current { Color32::from_rgb(38, 62, 105) } else if self.is_processed(i) { Color32::from_rgb(24, 34, 24) } else { Color32::from_gray(26) };
+                let w = ui.available_width().max(1.0);
+                let thumb_w = (w - 42.0).clamp(150.0, 240.0);
+                let thumb_h = (thumb_w * 9.0 / 16.0).clamp(84.0, 135.0);
+                let card_h = (thumb_h + 72.0).max(150.0);
                 ai_frame().fill(fill).show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
+                    ui.allocate_ui_with_layout(Vec2::new((w - 18.0).max(1.0), card_h), egui::Layout::top_down(egui::Align::Center), |ui| {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(thumb_w, thumb_h), egui::Sense::hover());
+                        if let Some(texture) = self.overview_thumbnails.get(&i) {
+                            ui.put(rect, egui::Image::new(texture).fit_to_exact_size(rect.size()));
+                        } else if let Some(reason) = self.thumbnail_errors.get(&i) {
+                            ui.painter().rect_filled(rect, egui::CornerRadius::same(3), Color32::from_rgb(55, 25, 25));
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, reason.chars().take(24).collect::<String>(), egui::FontId::proportional(10.0), Color32::LIGHT_RED);
+                        } else {
+                            ui.painter().rect_filled(rect, egui::CornerRadius::same(3), Color32::from_gray(18));
+                            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "加载中...", egui::FontId::proportional(11.0), Color32::from_gray(130));
+                            if !self.thumbnail_loaded.contains(&i)
+                                && !self.thumbnail_inflight.contains(&i)
+                                && !self.thumbnail_queue.contains(&i) {
+                                self.thumbnail_queue.push_back(i);
+                            }
+                        }
                         ui.label(RichText::new(format!("{}第 {} 个", if current { "> " } else { "" }, i + 1)).small().strong());
                         ui.add_sized([ui.available_width().max(1.0), 22.0], egui::Label::new(RichText::new(name).small()).truncate());
                     });
