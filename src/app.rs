@@ -308,7 +308,22 @@ impl eframe::App for VideoTaggerApp {
             .resizable(false)
             .min_width(210.0)
             .max_width(if self.ai_mode { 320.0 } else { 260.0 })
-            .show(ctx, |ui| self.render_sidebar(ui));
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    self.render_sidebar(ui);
+                    if self.ai_mode {
+                        self.render_ai_sidebar_settings(ui);
+                    }
+                });
+            });
+
+        if self.ai_mode && self.app_mode == AppMode::Sorting {
+            egui::TopBottomPanel::bottom("ai_output_integrated_panel")
+                .resizable(true)
+                .default_height(230.0)
+                .min_height(150.0)
+                .show(ctx, |ui| self.render_ai_output_area(ui));
+        }
 
         let central_frame = if self.app_mode == AppMode::Sorting {
             egui::Frame::none().fill(if self.ai_mode { Color32::from_rgb(20, 27, 38) } else { Color32::from_gray(24) })
