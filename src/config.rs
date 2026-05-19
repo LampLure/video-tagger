@@ -10,6 +10,7 @@ fn default_ai_audio_clips_per_batch() -> usize { 5 }
 fn default_ai_max_extra_sample_batches() -> usize { 3 }
 fn default_ai_stream_idle_timeout_seconds() -> u64 { 20 }
 fn default_ai_auto_accept() -> bool { true }
+fn default_ai_base_score() -> u8 { 50 }
 fn default_ai_text_settings() -> String { crate::ai::default_ai_text_settings() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,8 @@ pub struct AppConfig {
     pub tag_library: Vec<TagDef>,
     #[serde(default = "default_ai_auto_accept")]
     pub ai_auto_accept: bool,
+    #[serde(default = "default_ai_base_score")]
+    pub ai_base_score: u8,
     #[serde(default = "default_ai_image_max_pixels")]
     pub ai_image_max_pixels: u32,
     #[serde(default = "default_ai_jpeg_quality")]
@@ -95,6 +98,7 @@ impl Default for AppConfig {
             last_folder: None,
             tag_library: Vec::new(),
             ai_auto_accept: default_ai_auto_accept(),
+            ai_base_score: default_ai_base_score(),
             ai_image_max_pixels: default_ai_image_max_pixels(),
             ai_jpeg_quality: default_ai_jpeg_quality(),
             ai_audio_sample_rate: default_ai_audio_sample_rate(),
@@ -119,6 +123,7 @@ impl AppConfig {
             Self::default()
         };
         config.ui_scale = config.ui_scale.clamp(0.5, 3.0);
+        config.ai_base_score = config.ai_base_score.min(100);
         config.ai_image_max_pixels = config.ai_image_max_pixels.clamp(8_000, 500_000);
         config.ai_jpeg_quality = config.ai_jpeg_quality.clamp(20, 95);
         if ![8000, 16000, 22050, 44100].contains(&config.ai_audio_sample_rate) {
@@ -218,64 +223,22 @@ pub fn parse_video_name(stem: &str) -> Option<ParsedVideoName> {
     let mut starred = false;
     let mut labels = Vec::new();
     while rest.starts_with('[') {
-        let end = match rest.find(']') { Some(end) => end, None => break };
-        let token = rest.get(1..end).unwrap_or_default().to_string();
-        rest = rest.get(end + 1..).unwrap_or_default();
-        if token == "★" { starred = true; }
-        else if !token.is_empty() { labels.push(token); }
+        let end = rest.find(']')?;
+        let val = rest.get(1..end)?.to_string();
+        if val == "★" { starred = true; } else { labels.push(val); }
+        rest = rest.get(end + 1..)?;
     }
 
     let mut score = None;
     if rest.starts_with("{point") {
         if let Some(end) = rest.find('}') {
-            let token = rest.get(6..end).unwrap_or_default();
-            if token.len() == 3 && token.chars().all(|c| c.is_ascii_digit()) {
-                score = token.parse::<u8>().ok().map(|s| s.min(100));
-                rest = rest.get(end + 1..).unwrap_or_default();
+            let raw = rest.get(6..end)?;
+            if raw.len() == 3 && raw.chars().all(|c| c.is_ascii_digit()) {
+                score = raw.parse::<u8>().ok();
             }
+            rest = rest.get(end + 1..)?;
         }
     }
 
     Some(ParsedVideoName { identifier, index, starred, labels, score, original_stem: rest.to_string() })
-}
-
-pub fn format_video_name(
-    identifier: &str,
-    index: usize,
-    digit_count: usize,
-    labels: &[String],
-    starred: bool,
-    original_basename: &str,
-    extension: &str,
-    overwrite: bool,
-) -> String {
-    let num = format!("{:0width$}", index + 1, width = digit_count);
-    let star = if starred { "[★]" } else { "" };
-    let mut score: Option<u8> = None;
-    let label_str: String = labels
-        .iter()
-        .filter_map(|label| {
-            let clean = sanitize_filename(label);
-            if clean.len() == 8 && clean.starts_with("point") && clean[5..].chars().all(|c| c.is_ascii_digit()) {
-                score = clean[5..].parse::<u8>().ok().map(|s| s.min(100));
-                None
-            } else if clean.is_empty() {
-                None
-            } else {
-                Some(format!("[{}]", clean))
-            }
-        })
-        .collect();
-    let score_str = score.map(|s| format!("{{point{:03}}}", s.min(100))).unwrap_or_default();
-    let ext = extension.trim_start_matches('.');
-
-    if overwrite {
-        format!("[{identifier}][{num}]{star}{label_str}{score_str}.{ext}")
-    } else {
-        let original = parse_video_name(original_basename)
-            .map(|p| p.original_stem)
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| original_basename.to_string());
-        format!("[{identifier}][{num}]{star}{label_str}{score_str}{original}.{ext}")
-    }
 }
