@@ -25,12 +25,17 @@ impl VideoTaggerApp {
                     });
                 });
                 ui.add_space(8.0);
-                let output_h = 230.0;
-                let shot_h = (ui.available_height() - output_h - 42.0).clamp(260.0, 620.0);
+
+                let shot_h = (ui.available_height() * 0.48).clamp(260.0, 540.0);
                 self.render_ai_screenshots_simple(ui, ctx, shot_h);
-                let remaining_gap = (ui.available_height() - output_h).max(8.0);
-                ui.add_space(remaining_gap.min(34.0));
-                ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), output_h), egui::Layout::top_down(egui::Align::Min), |ui| self.render_ai_output_area(ui));
+                ui.add_space(8.0);
+
+                let output_h = ui.available_height().max(260.0);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), output_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.render_ai_output_area(ui),
+                );
             });
             ui.separator();
             ui.allocate_ui_with_layout(Vec2::new(list_width, height), egui::Layout::top_down(egui::Align::Min), |ui| self.render_ai_video_queue_simple(ui));
