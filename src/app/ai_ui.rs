@@ -1,9 +1,21 @@
 use super::*;
 
+fn compact_name(name: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= max_chars {
+        return name.to_string();
+    }
+    if max_chars <= 8 {
+        return chars.into_iter().take(max_chars).collect();
+    }
+    let head = (max_chars - 3) / 2;
+    let tail = max_chars - 3 - head;
+    let start: String = chars.iter().take(head).collect();
+    let end: String = chars.iter().skip(chars.len().saturating_sub(tail)).collect();
+    format!("{}...{}", start, end)
+}
+
 impl VideoTaggerApp {
-    // AI mode is now fully integrated by ui.rs:
-    // - render_sidebar() calls render_ai_sidebar_settings() inside the normal left column.
-    // - render_sorting() calls render_ai_output_area() in the old tag-control area.
     pub(super) fn render_ai_mode_toolbar(&mut self, _ctx: &egui::Context) {}
 
     pub(super) fn render_ai_sidebar_settings(&mut self, ui: &mut egui::Ui) {
@@ -34,15 +46,18 @@ impl VideoTaggerApp {
                     let script_names: Vec<String> = self.ai_scripts.iter()
                         .map(|path| path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string()))
                         .collect();
-                    let selected = script_names.get(self.ai_selected_script).cloned().unwrap_or_else(|| "未找到脚本".to_string());
+                    let selected_full = script_names.get(self.ai_selected_script).cloned().unwrap_or_else(|| "未找到脚本".to_string());
+                    let selected = compact_name(&selected_full, 24);
                     egui::ComboBox::from_id_salt("ai_model_script_integrated")
                         .selected_text(selected)
                         .width(150.0)
                         .show_ui(ui, |ui| {
                             for (i, name) in script_names.iter().enumerate() {
-                                ui.selectable_value(&mut self.ai_selected_script, i, name);
+                                ui.selectable_value(&mut self.ai_selected_script, i, compact_name(name, 36));
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text(selected_full);
                     if ui.small_button("脚本").clicked() { self.refresh_ai_scripts(); }
                 });
                 if self.ai_scripts.is_empty() {
