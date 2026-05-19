@@ -18,6 +18,7 @@ use crate::tags::{TagLibrary, MAX_TAG_CATEGORIES, MAX_TAGS_PER_CATEGORY, STAR_CA
 
 mod behavior;
 mod ai_behavior;
+mod ai_layout;
 mod ai_ui;
 mod ui;
 
@@ -326,25 +327,14 @@ impl eframe::App for VideoTaggerApp {
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| match self.app_mode {
             AppMode::Fresh => self.render_welcome(ui),
             AppMode::Overview => self.render_overview(ui),
-            AppMode::Sorting => self.render_sorting(ui, ctx),
+            AppMode::Sorting => {
+                if self.ai_mode {
+                    self.render_ai_sorting(ui, ctx)
+                } else {
+                    self.render_sorting(ui, ctx)
+                }
+            }
         });
-
-        if self.ai_mode && self.app_mode == AppMode::Sorting && !self.videos.is_empty() {
-            let screen = ctx.screen_rect();
-            let sidebar_w = 320.0;
-            let workspace_w = (screen.width() - sidebar_w).max(1.0);
-            let list_w = (workspace_w * 0.26).clamp(280.0, 410.0).min((workspace_w - 760.0).max(260.0));
-            let x = sidebar_w + 12.0;
-            let w = (screen.width() - sidebar_w - list_w - 36.0).max(420.0);
-            let y = (screen.bottom() - 260.0).max(360.0);
-            egui::Area::new("ai_output_workspace_panel".into())
-                .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(x, y))
-                .show(ctx, |ui| {
-                    ui.set_width(w);
-                    self.render_ai_output_area(ui);
-                });
-        }
 
         if self.app_mode == AppMode::Sorting && !self.videos.is_empty() {
             egui::TopBottomPanel::bottom("progress_bar").show(ctx, |ui| {
