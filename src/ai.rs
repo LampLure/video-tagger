@@ -235,6 +235,22 @@ fn send_log(tx: &mpsc::Sender<AiEvent>, work_id: u64, text: impl Into<String>) {
     let _ = tx.send(AiEvent::Log { work_id, text: text.into() });
 }
 
+fn compact_for_log(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn path_name(path: &Path) -> String {
+    path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string())
+}
+
 fn run_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) -> Result<(), String> {
     let schema = validate_ai_text_settings(&job.text_settings_json)?;
     let mut video = job.video.clone();
@@ -248,6 +264,7 @@ fn run_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) -> Result<(), 
         let is_last_budget = batch_index + 1 >= max_batches;
         let times = sample_times(duration, batch_index);
         send_log(&tx, job.work_id, if batch_index == 0 { "AI：正在进行全片均匀采样。".to_string() } else { format!("AI：正在获取第 {} / {} 次追加采样。", batch_index, job.runtime.max_extra_sample_batches) });
+        send_log(&tx, job.work_id, format!("程序 -> AI：本轮采样时间点：{}。", times.iter().map(|t| format!("{:.1}s", t)).collect::<Vec<_>>().join(" / ")));
         let image_paths = build_ai_images(&job, temp_dir.path(), &times)?;
         let _ = tx.send(AiEvent::Preview { work_id: job.work_id, paths: image_paths.clone(), times: times.clone() });
         let audio_paths = if job.allow_audio && job.runtime.audio_clips_per_batch > 0 { build_ai_audio(&job, temp_dir.path(), &times)? } else { Vec::new() };
@@ -255,7 +272,6 @@ fn run_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) -> Result<(), 
         let decision = call_with_retry(&job, &schema, &image_paths, &audio_paths, &working_summary, is_last_budget, &tx)?;
         match decision {
             AiModelDecision::Final(result) => {
-                save_raw_log("ai_last_raw_response.txt", &format!("final labels={:?} score={} evidence={}\n", result.labels, result.score, result.evidence_summary));
                 send_log(&tx, job.work_id, format!("AI：最终标签：{}。", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") }));
                 send_log(&tx, job.work_id, format!("AI：评分：{} 分。", result.score));
                 if !result.evidence_summary.trim().is_empty() { send_log(&tx, job.work_id, format!("AI：依据：{}", result.evidence_summary)); }
@@ -268,6 +284,8 @@ fn run_video_analysis(job: AiVideoJob, tx: mpsc::Sender<AiEvent>) -> Result<(), 
                     send_log(&tx, job.work_id, "AI：追加采样次数已达到上限，将基于现有证据生成最终标签。".to_string());
                     let decision = call_with_retry(&job, &schema, &[], &[], &working_summary, true, &tx)?;
                     if let AiModelDecision::Final(result) = decision {
+                        send_log(&tx, job.work_id, format!("AI：最终标签：{}。", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") }));
+                        send_log(&tx, job.work_id, format!("AI：评分：{} 分。", result.score));
                         let _ = tx.send(AiEvent::Done { work_id: job.work_id, result });
                         return Ok(());
                     }
@@ -311,7 +329,7 @@ fn sample_times(duration: f64, batch_index: usize) -> Vec<f64> {
     let start = duration * start_ratio;
     let end = duration * end_ratio;
     let count = 10usize;
-    (0..count).map(|i| { let t = start + (end - start) * (i as f64) / ((count - 1) as f64); t.clamp(0.0, (duration - 0.05).max(0.0)) }).collect()
+    (0..count).map(|i| { let t = start + (end - start) * (i as f64) / ((count - 1) as f64); t.clamp(0.0, (duration - 0.35).max(0.0)) }).collect()
 }
 
 fn evenly_spaced_indices(total: usize, count: usize) -> Vec<usize> {
@@ -325,10 +343,36 @@ fn call_with_retry(job: &AiVideoJob, schema: &AiTextSchema, image_paths: &[PathB
     for attempt in 0..=1 {
         if attempt == 1 { send_log(tx, job.work_id, format!("AI：输出格式不符合要求，正在自动重试。错误：{}", last_error)); }
         let prompt = build_prompt(&job.video, schema, working_summary, force_final, attempt == 1, &last_error);
-        let raw = call_llama(&prompt, image_paths, audio_paths, job.runtime.stream_idle_timeout_seconds)?;
-        let _ = tx.send(AiEvent::Log { work_id: job.work_id, text: "AI：已收到模型输出，正在校验格式。".to_string() });
+        save_raw_log("ai_last_prompt.txt", &prompt);
+        send_log(tx, job.work_id, format!("程序 -> AI：发送提示词，force_final={}，重试={}。完整提示词已保存到 logs/ai_last_prompt.txt。", force_final, attempt == 1));
+        send_log(tx, job.work_id, format!("程序 -> AI：提示词预览：{}", compact_for_log(&prompt.replace('\n', " "), 420)));
+        if !image_paths.is_empty() {
+            send_log(tx, job.work_id, format!("程序 -> AI：附加图片 {} 张：{}", image_paths.len(), image_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、")));
+        }
+        if !audio_paths.is_empty() {
+            send_log(tx, job.work_id, format!("程序 -> AI：附加音频 {} 段：{}", audio_paths.len(), audio_paths.iter().map(|p| path_name(p)).collect::<Vec<_>>().join("、")));
+        }
+        let raw = call_llama(&prompt, image_paths, audio_paths, job.runtime.stream_idle_timeout_seconds, tx, job.work_id)?;
+        send_log(tx, job.work_id, "AI：已收到模型输出，正在校验格式。".to_string());
         save_raw_log("ai_last_raw_response.txt", &raw);
-        match parse_model_decision(&raw, schema, force_final) { Ok(decision) => return Ok(decision), Err(err) => last_error = err }
+        send_log(tx, job.work_id, "程序：完整模型原文已保存到 logs/ai_last_raw_response.txt。".to_string());
+        match parse_model_decision(&raw, schema, force_final) {
+            Ok(decision) => {
+                match &decision {
+                    AiModelDecision::Final(result) => {
+                        send_log(tx, job.work_id, format!("程序：解析到 final。标签={}，评分={}。", if result.labels.is_empty() { "无".to_string() } else { result.labels.join("、") }, result.score));
+                    }
+                    AiModelDecision::NeedMore { reason, .. } => {
+                        send_log(tx, job.work_id, format!("程序：解析到 need_more_samples。原因：{}", reason));
+                    }
+                }
+                return Ok(decision);
+            }
+            Err(err) => {
+                send_log(tx, job.work_id, format!("程序：模型输出校验失败：{}", err));
+                last_error = err;
+            }
+        }
     }
     Err(last_error)
 }
@@ -373,7 +417,7 @@ need_more_samples JSON 格式：
 "#, video_name = video.filename, duration = video.duration_secs.unwrap_or(0.0), force_final = force_final, retry_text = if retry { format!("上次输出错误：{}。这次必须修正格式。", last_error) } else { String::new() }, tag_groups = serde_json::to_string_pretty(&tag_groups_text).unwrap_or_default(), score_rules = serde_json::to_string_pretty(&score_rules_text).unwrap_or_default(), working_summary = if working_summary.is_null() { "null".to_string() } else { serde_json::to_string_pretty(working_summary).unwrap_or_default() })
 }
 
-fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], idle_timeout_seconds: u64) -> Result<String, String> {
+fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], idle_timeout_seconds: u64, tx: &mpsc::Sender<AiEvent>, work_id: u64) -> Result<String, String> {
     let client = Client::builder().timeout(Duration::from_secs(idle_timeout_seconds.max(1))).connect_timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
     let mut content = Vec::new();
     content.push(json!({ "type": "text", "text": prompt }));
@@ -388,10 +432,13 @@ fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], id
         content.push(json!({ "type": "input_audio", "input_audio": { "data": b64, "format": "wav" } }));
     }
     let body = json!({ "model": "local-model", "messages": [{ "role": "user", "content": content }], "temperature": 0.1, "max_tokens": 1200, "stream": true });
+    send_log(tx, work_id, format!("程序 -> AI：POST {}，stream=true，content 项={}。", LLAMA_CHAT_URL, 1 + image_paths.len() + audio_paths.len()));
     let response = client.post(LLAMA_CHAT_URL).json(&body).send().map_err(|e| format!("AI 请求失败: {}", e))?;
     if !response.status().is_success() { return Err(format!("AI 服务返回错误状态: {}", response.status())); }
+    send_log(tx, work_id, "AI -> 程序：开始接收流式输出。".to_string());
     let reader = BufReader::new(response);
     let mut out = String::new();
+    let mut pending = String::new();
     for line in reader.lines() {
         let line = line.map_err(|e| format!("AI 流式读取失败或超时: {}", e))?;
         let line = line.trim();
@@ -399,8 +446,19 @@ fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], id
         let data = line.trim_start_matches("data:").trim();
         if data == "[DONE]" { break; }
         let value: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
-        if let Some(s) = value.pointer("/choices/0/delta/content").and_then(Value::as_str) { out.push_str(s); }
-        else if let Some(s) = value.pointer("/choices/0/message/content").and_then(Value::as_str) { out.push_str(s); }
+        let delta = value.pointer("/choices/0/delta/content").and_then(Value::as_str)
+            .or_else(|| value.pointer("/choices/0/message/content").and_then(Value::as_str));
+        if let Some(s) = delta {
+            out.push_str(s);
+            pending.push_str(s);
+            if pending.chars().count() >= 160 || pending.contains('\n') {
+                send_log(tx, work_id, format!("AI -> 程序：{}", pending.trim()));
+                pending.clear();
+            }
+        }
+    }
+    if !pending.trim().is_empty() {
+        send_log(tx, work_id, format!("AI -> 程序：{}", pending.trim()));
     }
     if out.trim().is_empty() { return Err("AI 返回内容为空".into()); }
     Ok(out)
