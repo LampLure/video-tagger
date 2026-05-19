@@ -18,6 +18,35 @@ fn compact_name(name: &str, max_chars: usize) -> String {
 impl VideoTaggerApp {
     pub(super) fn render_ai_mode_toolbar(&mut self, _ctx: &egui::Context) {}
 
+    fn force_stop_ai_service_and_port(&mut self) {
+        if let Some(mut child) = self.ai_model_process.take() {
+            ai::stop_process_tree(&mut child);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :7080') do taskkill /PID %a /T /F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        #[cfg(all(unix, not(target_os = "windows")))]
+        {
+            let _ = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("fuser -k 7080/tcp >/dev/null 2>&1 || true; pids=$(lsof -ti tcp:7080 2>/dev/null || true); if [ -n \"$pids\" ]; then kill -9 $pids >/dev/null 2>&1 || true; fi")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        self.ai_service_state = AiServiceState::Disconnected;
+        self.ai_service_props = None;
+        self.ai_batch_state = AiBatchState::Idle;
+        self.ai_pending_result = None;
+        self.ai_log.push("程序：已强制停止 AI 服务，并尝试杀死占用 7080 端口的进程。".to_string());
+        self.ai_notice = Some("已强制停止 AI 服务，并尝试杀死占用 7080 端口的进程。".to_string());
+    }
+
     pub(super) fn render_ai_sidebar_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         egui::Frame::none()
@@ -78,8 +107,7 @@ impl VideoTaggerApp {
                 ui.horizontal_wrapped(|ui| {
                     let can_start = self.ai_service_state == AiServiceState::Disconnected && !self.ai_scripts.is_empty();
                     if ui.add_enabled(can_start, egui::Button::new("启动")).clicked() { self.start_ai_model_service(); }
-                    let can_stop = self.ai_service_state == AiServiceState::ConnectedOwned;
-                    if ui.add_enabled(can_stop, egui::Button::new("停止")).clicked() { self.stop_ai_model_service(); }
+                    if ui.button("停止").clicked() { self.force_stop_ai_service_and_port(); }
                     if ui.button("刷新能力").clicked() { self.refresh_ai_props(); }
                 });
             });
@@ -95,7 +123,12 @@ impl VideoTaggerApp {
                 ui.horizontal(|ui| { ui.label("JPG"); if ui.add(egui::DragValue::new(&mut self.config.ai_jpeg_quality).range(20..=95)).changed() { self.config.save(); } });
                 ui.horizontal(|ui| { ui.label("音频秒"); if ui.add(egui::DragValue::new(&mut self.config.ai_audio_clip_seconds).range(1.0..=10.0).speed(0.5)).changed() { self.config.save(); } });
                 ui.horizontal(|ui| { ui.label("音频段"); if ui.add(egui::DragValue::new(&mut self.config.ai_audio_clips_per_batch).range(0..=10)).changed() { self.config.save(); } });
-                ui.horizontal(|ui| { ui.label("超时"); if ui.add(egui::DragValue::new(&mut self.config.ai_stream_idle_timeout_seconds).range(5..=600)).changed() { self.config.save(); } ui.label("秒"); });
+                ui.horizontal(|ui| { ui.label("超时"); if ui.add(egui::DragValue::new(&mut self.config.ai_stream_idle_timeout_seconds).range(60..=3600)).changed() { self.config.save(); } ui.label("秒"); });
+                if self.config.ai_stream_idle_timeout_seconds < 60 {
+                    self.config.ai_stream_idle_timeout_seconds = 600;
+                    self.config.save();
+                }
+                ui.label(RichText::new("本地多模态模型首 token 可能很慢，建议超时 >= 600 秒。" ).small().color(Color32::from_gray(150)));
             });
     }
 
@@ -155,6 +188,11 @@ impl VideoTaggerApp {
                         if self.ai_batch_state == AiBatchState::Running || self.ai_batch_state == AiBatchState::AwaitingConfirmation {
                             if ui.button("取消 AI 分析").clicked() { self.request_cancel_ai(); }
                         } else if ui.add_enabled(self.app_mode == AppMode::Sorting, egui::Button::new("启动 AI 分析")).clicked() {
+                            if self.config.ai_stream_idle_timeout_seconds < 600 {
+                                self.config.ai_stream_idle_timeout_seconds = 600;
+                                self.config.save();
+                                self.ai_log.push("程序：已将 AI 超时自动提升到 600 秒，避免本地模型首 token 过慢导致误判通信失败。".to_string());
+                            }
                             self.start_ai_batch();
                         }
                     });
@@ -199,7 +237,7 @@ impl VideoTaggerApp {
             .show(ctx, |ui| {
                 ui.label("取消 AI 分析会强制关闭模型服务，并丢弃当前视频结果。是否继续？");
                 ui.horizontal(|ui| {
-                    if ui.button("继续取消").clicked() { self.ai_confirm_cancel = false; self.cancel_ai_now(); }
+                    if ui.button("继续取消").clicked() { self.ai_confirm_cancel = false; self.force_stop_ai_service_and_port(); }
                     if ui.button("返回").clicked() { self.ai_confirm_cancel = false; }
                 });
             });
