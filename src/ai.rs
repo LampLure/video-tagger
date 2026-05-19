@@ -14,6 +14,9 @@ use crate::ffmpeg;
 
 pub const LLAMA_PROPS_URL: &str = "http://127.0.0.1:7080/props";
 pub const LLAMA_CHAT_URL: &str = "http://127.0.0.1:7080/v1/chat/completions";
+pub const AI_STREAM_START: &str = "__AI_STREAM_START__";
+pub const AI_STREAM_DELTA: &str = "__AI_STREAM_DELTA__";
+pub const AI_STREAM_END: &str = "__AI_STREAM_END__";
 
 #[derive(Debug, Clone, Default)]
 pub struct AiServiceProps {
@@ -436,9 +439,9 @@ fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], id
     let response = client.post(LLAMA_CHAT_URL).json(&body).send().map_err(|e| format!("AI 请求失败: {}", e))?;
     if !response.status().is_success() { return Err(format!("AI 服务返回错误状态: {}", response.status())); }
     send_log(tx, work_id, "AI -> 程序：开始接收流式输出。".to_string());
+    send_log(tx, work_id, AI_STREAM_START.to_string());
     let reader = BufReader::new(response);
     let mut out = String::new();
-    let mut pending = String::new();
     for line in reader.lines() {
         let line = line.map_err(|e| format!("AI 流式读取失败或超时: {}", e))?;
         let line = line.trim();
@@ -450,16 +453,10 @@ fn call_llama(prompt: &str, image_paths: &[PathBuf], audio_paths: &[PathBuf], id
             .or_else(|| value.pointer("/choices/0/message/content").and_then(Value::as_str));
         if let Some(s) = delta {
             out.push_str(s);
-            pending.push_str(s);
-            if pending.chars().count() >= 160 || pending.contains('\n') {
-                send_log(tx, work_id, format!("AI -> 程序：{}", pending.trim()));
-                pending.clear();
-            }
+            send_log(tx, work_id, format!("{}{}", AI_STREAM_DELTA, s));
         }
     }
-    if !pending.trim().is_empty() {
-        send_log(tx, work_id, format!("AI -> 程序：{}", pending.trim()));
-    }
+    send_log(tx, work_id, AI_STREAM_END.to_string());
     if out.trim().is_empty() { return Err("AI 返回内容为空".into()); }
     Ok(out)
 }
