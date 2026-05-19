@@ -133,34 +133,50 @@ impl VideoTaggerApp {
     }
 
     fn render_ai_text_settings(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("AI 文本设置")
+        egui::CollapsingHeader::new("AI 文本与提示词")
             .default_open(true)
             .show(ui, |ui| {
-                ui.label(RichText::new("配置文件：ai_text_settings.json").small().color(Color32::from_gray(170)));
+                ui.label(RichText::new("标签/评分文件：ai_text_settings.json").small().color(Color32::from_gray(170)));
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("打开 JSON 文件").clicked() {
+                    if ui.button("打开标签 JSON").clicked() {
                         match self.open_ai_text_settings_file() {
-                            Ok(()) => self.ai_notice = Some("已打开 AI 文本设置文件。修改保存后，点击“重新加载”。".to_string()),
+                            Ok(()) => self.ai_notice = Some("已打开 AI 标签/评分设置文件。修改保存后，点击“重新加载标签”。".to_string()),
                             Err(err) => self.ai_notice = Some(err),
                         }
                     }
-                    if ui.button("重新加载").clicked() {
+                    if ui.button("重新加载标签").clicked() {
                         self.ai_notice = Some(match self.load_ai_text_settings_from_file() {
-                            Ok(()) => "AI 文本设置已重新加载，并通过校验。".to_string(),
+                            Ok(()) => "AI 标签/评分设置已重新加载，并通过校验。".to_string(),
                             Err(err) => err,
                         });
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("校验当前文件").clicked() {
+                    if ui.small_button("校验标签文件").clicked() {
                         self.ai_notice = Some(match self.load_ai_text_settings_from_file() {
-                            Ok(()) => "AI 文本设置校验通过。".to_string(),
+                            Ok(()) => "AI 标签/评分设置校验通过。".to_string(),
                             Err(err) => err,
                         });
                     }
-                    if ui.small_button("恢复默认文件").clicked() {
+                    if ui.small_button("恢复默认标签").clicked() {
                         self.ai_notice = Some(match self.reset_ai_text_settings_file() {
-                            Ok(()) => "AI 文本设置文件已恢复默认模板。".to_string(),
+                            Ok(()) => "AI 标签/评分设置文件已恢复默认模板。".to_string(),
+                            Err(err) => err,
+                        });
+                    }
+                });
+                ui.separator();
+                ui.label(RichText::new("提示词文件：ai_prompt_template.txt").small().color(Color32::from_gray(170)));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("打开提示词").clicked() {
+                        match self.open_ai_prompt_template_file() {
+                            Ok(()) => self.ai_notice = Some("已打开 AI 提示词模板。修改保存后，下次 AI 分析会自动使用新提示词。".to_string()),
+                            Err(err) => self.ai_notice = Some(err),
+                        }
+                    }
+                    if ui.small_button("恢复默认提示词").clicked() {
+                        self.ai_notice = Some(match self.reset_ai_prompt_template_file() {
+                            Ok(()) => "AI 提示词模板已恢复默认。".to_string(),
                             Err(err) => err,
                         });
                     }
