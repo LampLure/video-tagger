@@ -1,67 +1,16 @@
 use super::*;
 
 impl VideoTaggerApp {
-    // App.rs calls this after the normal top bar. The title button is rendered by ui.rs itself.
-    // AI settings are placed in the existing left control column, and AI output is placed in the
-    // former lower tag area when sorting mode is active.
-    pub(super) fn render_ai_mode_toolbar(&mut self, ctx: &egui::Context) {
-        if !self.ai_mode {
-            return;
-        }
-        self.render_ai_sidebar_overlay(ctx);
-        if self.app_mode == AppMode::Sorting {
-            self.render_ai_output_overlay(ctx);
-        }
-    }
-
-    fn render_ai_sidebar_overlay(&mut self, ctx: &egui::Context) {
-        let rect = ctx.screen_rect();
-        let top = 430.0_f32.min((rect.bottom() - 260.0).max(150.0));
-        let max_h = (rect.bottom() - top - 28.0).max(220.0);
-        egui::Area::new("ai_sidebar_overlay".into())
-            .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(8.0, top))
-            .show(ctx, |ui| {
-                ui.set_width(188.0);
-                egui::Frame::none()
-                    .fill(Color32::from_rgb(18, 30, 46))
-                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(55, 105, 160)))
-                    .corner_radius(egui::CornerRadius::same(4))
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        ui.set_max_height(max_h);
-                        ui.label(RichText::new("AI 设置").strong().size(14.0).color(Color32::from_rgb(190, 225, 255)));
-                        ui.separator();
-                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            self.render_ai_service_controls(ui);
-                            ui.separator();
-                            self.render_ai_runtime_settings(ui);
-                            ui.separator();
-                            self.render_ai_text_settings(ui);
-                        });
-                    });
-            });
-    }
-
-    fn render_ai_output_overlay(&mut self, ctx: &egui::Context) {
-        let rect = ctx.screen_rect();
-        let width = (rect.width() - 640.0).clamp(520.0, 980.0);
-        let x = 215.0;
-        let y = (rect.bottom() - 270.0).max(420.0);
-        egui::Area::new("ai_output_overlay".into())
-            .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(x, y))
-            .show(ctx, |ui| {
-                ui.set_width(width);
-                self.render_ai_output_area(ui);
-            });
-    }
+    // AI mode is now fully integrated by ui.rs:
+    // - render_sidebar() calls render_ai_sidebar_settings() inside the normal left column.
+    // - render_sorting() calls render_ai_output_area() in the old tag-control area.
+    pub(super) fn render_ai_mode_toolbar(&mut self, _ctx: &egui::Context) {}
 
     pub(super) fn render_ai_sidebar_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         egui::Frame::none()
             .fill(Color32::from_rgb(18, 30, 46))
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(38, 72, 110)))
+            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(55, 105, 160)))
             .corner_radius(egui::CornerRadius::same(4))
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
@@ -75,7 +24,6 @@ impl VideoTaggerApp {
             });
     }
 
-    // Disabled: no floating AI window.
     pub(super) fn render_ai_control_window(&mut self, _ctx: &egui::Context) {}
 
     fn render_ai_service_controls(&mut self, ui: &mut egui::Ui) {
@@ -89,7 +37,7 @@ impl VideoTaggerApp {
                     let selected = script_names.get(self.ai_selected_script).cloned().unwrap_or_else(|| "未找到脚本".to_string());
                     egui::ComboBox::from_id_salt("ai_model_script_integrated")
                         .selected_text(selected)
-                        .width(118.0)
+                        .width(150.0)
                         .show_ui(ui, |ui| {
                             for (i, name) in script_names.iter().enumerate() {
                                 ui.selectable_value(&mut self.ai_selected_script, i, name);
@@ -203,7 +151,7 @@ impl VideoTaggerApp {
                     ui.label(RichText::new("Space 接受，Delete 重新生成。" ).small().color(Color32::YELLOW));
                     ui.separator();
                 }
-                egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().stick_to_bottom(true).max_height(190.0).auto_shrink([false, false]).show(ui, |ui| {
                     if self.ai_log.is_empty() {
                         ui.label(RichText::new("AI 实时分析日志会显示在这里。" ).color(Color32::from_gray(140)));
                     } else {
